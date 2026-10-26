@@ -40,7 +40,7 @@
   const activeCount = (pid) => App.data.tasks.filter((t) => !t.done && t.project === pid).length;
   const show = (...nodes) => root.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false));
 
-  let roots = { projects: [], drives: [], favs: [] };
+  let roots = { projects: [], drives: [], favs: [], apps: [] };
   const rootById = (id) => roots.projects.find((x) => x.id === id) || roots.drives.find((x) => x.id === id) || null;
   const isProject = (id) => roots.projects.some((x) => x.id === id);
   const isFav = (id, path) => roots.favs.some((f) => f.root === id && f.rel === path);
@@ -119,6 +119,11 @@
       roots.drives.forEach((d) => grid.append(folderCard(d.id, d.name, d.path, '')));
       children.push(grid);
     } else children.push(h('div', { class: 'empty', text: 'No drives are set up. Add them under "explorer" in the settings file (cog in the left rail).' }));
+    if ((roots.apps || []).length) {
+      children.push(h('h2', { style: 'margin-top:28px', text: 'Apps' }));
+      children.push(h('div', { class: 'row' }, roots.apps.map((a) => h('button', { onclick: () => act(() => window.cc.launchApp(a.id), 'Opened ' + a.name + '.') }, a.name))));
+      children.push(noteBox());
+    }
     show(children);
   }
 
@@ -207,8 +212,15 @@
       h('div', { class: 'row actions' },
         h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened.') }, 'Open'),
         h('button', { onclick: () => act(() => window.cc.revealFile(p.id, loc.path), 'Shown in File Explorer.') }, 'Show in File Explorer'),
+        ...openWithButtons(p),
         h('button', { class: 'ghost', onclick: () => goTo(p.id, parentOf(loc.path)) }, '‹ Back to folder')),
       noteBox(), body);
+  }
+
+  function openWithButtons(p) {
+    const ext = (/\.[^./]+$/.exec(loc.path) || [''])[0].toLowerCase();
+    return (roots.apps || []).filter((a) => a.types.includes(ext)).map((a) =>
+      h('button', { onclick: () => act(() => window.cc.openWith(a.id, p.id, loc.path), 'Opened in ' + a.name + '.') }, 'Open with ' + a.name));
   }
 
   function favButton(p) {

@@ -41,6 +41,7 @@
     const roots = (await window.cc.getRoots()) || { projects: [], drives: [], favs: [] };
     (projects || []).forEach((p) => items.push({ key: 'proj:' + p.id, group: 'Folders', label: p.name, meta: 'Favourite', run: () => window.cc.navigate({ section: 'projects', project: p.id }) }));
     roots.favs.forEach((f, i) => items.push({ key: 'fav:' + i, group: 'Folders', label: f.name, meta: 'Favourite', run: () => window.cc.navigate({ section: 'projects', project: f.root, path: f.rel }) }));
+    (roots.apps || []).forEach((a) => items.push({ key: 'launch:' + a.id.replace(/[^\w.-]/g, '').slice(0, 50), group: 'Apps', label: a.name, meta: 'Open app', run: () => window.cc.launchApp(a.id) }));
     roots.drives.forEach((d) => items.push({ key: 'drv:' + d.id.replace(/[^\w.-]/g, '').slice(0, 50), group: 'Folders', label: d.name, meta: 'This PC', run: () => window.cc.navigate({ section: 'projects', project: d.id }) }));
     ((data && data.tasks) || []).filter((t) => !t.done).slice(0, 300).forEach((t) => items.push({ key: 'task:' + t.id, group: 'Tasks', label: t.title, meta: t.due || '', run: () => window.cc.select('tasks') }));
     const today = todayStr();
