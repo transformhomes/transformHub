@@ -38,7 +38,10 @@
     recents = (ui && ui.recents) || [];
     const items = [];
     (sections || []).filter((s) => s.type !== 'disabled').forEach((s) => items.push({ key: 'go:' + s.id, group: 'Go to', label: s.label, run: () => window.cc.select(s.id) }));
-    (projects || []).forEach((p) => items.push({ key: 'proj:' + p.id, group: 'Projects', label: p.name, meta: 'AI Projects', run: () => window.cc.navigate({ section: 'projects', project: p.id }) }));
+    const roots = (await window.cc.getRoots()) || { projects: [], drives: [], favs: [] };
+    (projects || []).forEach((p) => items.push({ key: 'proj:' + p.id, group: 'Folders', label: p.name, meta: 'Favourite', run: () => window.cc.navigate({ section: 'projects', project: p.id }) }));
+    roots.favs.forEach((f, i) => items.push({ key: 'fav:' + i, group: 'Folders', label: f.name, meta: 'Favourite', run: () => window.cc.navigate({ section: 'projects', project: f.root, path: f.rel }) }));
+    roots.drives.forEach((d) => items.push({ key: 'drv:' + d.id.replace(/[^\w.-]/g, '').slice(0, 50), group: 'Folders', label: d.name, meta: 'This PC', run: () => window.cc.navigate({ section: 'projects', project: d.id }) }));
     ((data && data.tasks) || []).filter((t) => !t.done).slice(0, 300).forEach((t) => items.push({ key: 'task:' + t.id, group: 'Tasks', label: t.title, meta: t.due || '', run: () => window.cc.select('tasks') }));
     const today = todayStr();
     [...((data && data.events) || []), ...((feeds && feeds.events) || [])].filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 300)

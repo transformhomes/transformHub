@@ -1,20 +1,20 @@
 # TH Command Centre (transformHub)
 
-One window for your inbox, projects, tasks, calendar, Teams, OneDrive and Claude.
+One window for your inbox, files, tasks, calendar, Teams, OneDrive and Claude.
 Windows desktop app built with Electron. See package.json for the version.
 
 | Icon | What it is |
 |---|---|
 | Home | Needs attention (overdue and due today), today's events, next 7 days, focus project |
 | Inbox | Outlook on the web |
-| AI Projects | Your project list and a read-only folder browser (tree in the side panel) |
+| Explorer | A read-only folder browser: favourites and your drives, with the folder tree in the side panel |
 | Tasks | Add, tick off, delete (with undo). Saved on this computer. Can also show Microsoft To Do (experimental, read-only) |
 | Calendar | Full month view, side panel with today and the next 14 days, add events. Saved on this computer. Can also show your Outlook calendar (read-only, see below) |
 | Teams | Microsoft Teams on the web |
 | Files | OneDrive on the web |
 | Claude | claude.ai on the web |
 
-Outlook, Teams, OneDrive and Claude are the web versions, signed in once and kept signed in.
+Outlook, Teams, OneDrive and Claude are the web versions. Each person signs in once with their own account and stays signed in; sign-ins are stored on that person's own Windows profile, not in this code.
 Tasks and Calendar are built in.
 
 ## Quick start (Windows)
@@ -28,35 +28,42 @@ Double-click `transformHub.cmd`. It installs what it needs the first time, then 
        npm install
        npm start
 
-Keys. In the built-in pages (Home, AI Projects, Tasks, Calendar): Ctrl+1 to Ctrl+9 switch section, Ctrl+R reloads, Ctrl+K opens search and commands.
-In web tabs (Outlook, Teams, OneDrive, Claude, DOMO) those keys belong to the site, so use Alt+1 to Alt+9 to switch section, F5 to reload and Ctrl+Shift+K for search.
-Ctrl+\ shows or hides the activity panel everywhere.
+Keys. In the built-in pages (Home, Explorer, Tasks, Calendar): Ctrl+1 to Ctrl+9 switch section, Ctrl+R reloads, Ctrl+K opens search and commands.
+In web tabs (Outlook, Teams, OneDrive, Claude, dashboards) those keys belong to the site, so use Alt+1 to Alt+9 to switch section, F5 to reload and Ctrl+Shift+K for search.
+Ctrl+\ shows or hides the side panel everywhere.
 
-## AI Projects as a file browser
-Open AI Projects and the side panel becomes a folder tree of your projects. Click a folder to open it in the main area, click a file to preview it (text and images), and use Open or Show in Explorer for anything else. It is read-only: nothing is deleted or changed, programs and scripts are never run from here, and it cannot go outside your project folders.
+## Explorer
+Open Explorer and the side panel becomes a folder tree with two groups. **Favourites** holds your configured project folders and any folder you star. **This PC** holds your drives (C:\ by default). Hover over a folder and click the star to add or remove it from Favourites; the same button is on each folder's page. Click a folder to open it in the main area, click a file to preview it (text and images), and use Open or Show in File Explorer for anything else.
+
+It is read-only: nothing is deleted or changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
+
+To change the drives, add this to your settings file (a drive letter, or a name and folder):
+
+       "explorer": { "drives": ["C:\\", "D:\\"] }
 
 ## Light and dark, and the logo
 The sun/moon button in the header switches between light and dark; your choice is remembered. Until you choose, the app follows Windows. If a file called `transformHub.png` sits in the app folder, it shows at the top of the left rail and is used as the window icon. The logo and icon files are not stored in this repository.
 
 ## Microsoft To Do in Tasks (experimental, read-only)
-Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page and the activity panel (titles only, read-only; tick them off in To Do). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
+Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page and the side panel (titles only, read-only; tick them off in To Do). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
 
 ## Icons
 Rail icons are colour-coded by type. Web tabs show the site's own icon once you have opened the tab once.
 
 ## Adding a web tab (for example a dashboard)
-Add a section to your personal settings file: `{ "id": "domo", "label": "DOMO", "icon": "chart", "type": "web", "url": "https://your-dashboard-link" }`. Keep company dashboard links in your personal settings file only, never in the files you commit. Sign-in happens inside the app; whether your company's single sign-on works there is untested.
+Add a section to your settings file: `{ "id": "domo", "label": "DOMO", "icon": "chart", "type": "web", "url": "https://your-dashboard-link" }`. Keep company dashboard links in your settings file only, never in the files you commit. Sign-in happens inside the app; whether your company's single sign-on works there is untested.
 
-## Your projects and name
+## Your folders and name
 
 The app creates its settings file on first run at `%APPDATA%\th-command-centre\config.json`.
 The committed default only has an example project. To use your own list, edit that file
-(cog icon in the left rail opens it). A personal `config.dale.json` can hold real project
-names and folders; it is ignored by git so it never goes to GitHub.
+(the cog in the left rail opens it). A copy of your settings kept in this folder as
+`config.personal.json` (or any `config.*.json` except the default) is ignored by git, so real folder names and links never go to GitHub.
 
-Settings you can change: `userName`, `calendarFeeds`, `projects` (id, name, folder), `arcaneUrl`, `dataDir`, `msTodo` and the `sections` list.
+Settings you can change: `userName`, `calendarFeeds`, `projects` (id, name, folder), `explorer` (drives), `arcaneUrl`, `dataDir`, `msTodo` and the `sections` list.
 Restart the app after editing. Upgrading from 0.1: your old settings are kept as
-`config.v1.bak.json` and replaced with the new layout.
+`config.v1.bak.json` and replaced with the new layout. The old "AI Projects" tab is renamed Explorer automatically; a name you chose yourself is kept.
+Favourites you star are remembered per person in `ui-state.json` next to the settings file.
 
 ## Where your data lives
 
@@ -70,7 +77,7 @@ example a OneDrive folder for backup), set `dataDir` in the settings file.
 
 In Outlook on the web: Settings, Calendar, Shared calendars, Publish a calendar. Choose the
 calendar and permission, click Publish, and copy the **ICS** link. Then add it to your
-settings file (`%APPDATA%\th-command-centre\config.json`, cog icon opens it):
+settings file (`%APPDATA%\th-command-centre\config.json`, the cog opens it):
 
        "calendarFeeds": [ { "name": "Outlook", "url": "PASTE_THE_ICS_LINK_HERE" } ],
 
@@ -80,7 +87,7 @@ Home. They are read-only: change them in Outlook. The app refreshes every 15 min
 
 The link is a secret: anyone with it can read that calendar. Keep it only in your settings file.
 It is never sent to the pages, written to the cache or logged. Only the title, date and time of
-each event are kept (no attendees, notes or locations). `config.json` and `config.dale.json` are
+each event are kept (no attendees, notes or locations). `config.json` and `config.personal.json` are
 ignored by git. To cancel the link, unpublish the calendar in Outlook on the web.
 
 ## Make an installer (optional)
