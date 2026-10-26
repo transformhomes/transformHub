@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('cc', {
   onFeedsChanged: (fn) => ipcRenderer.on('feeds:changed', (_e, s) => fn(s)),
   getProjects: () => ipcRenderer.invoke('projects:list'),
   getRoots: () => ipcRenderer.invoke('explorer:roots'),
+  launchApp: (id) => ipcRenderer.invoke('app:launch', id),
+  openWith: (id, root, rel) => ipcRenderer.invoke('app:open-with', id, root, rel),
   toggleFav: (root, rel, name) => ipcRenderer.invoke('explorer:fav', root, rel, name),
   openFolder: (id) => ipcRenderer.invoke('projects:open-folder', id),
   openArcane: () => ipcRenderer.invoke('projects:open-arcane'),

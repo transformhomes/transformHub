@@ -37,12 +37,23 @@ Open Explorer and the side panel becomes a folder tree with two groups. **Favour
 
 It is read-only: nothing is deleted or changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
 
-To change the drives, add this to your settings file (a drive letter, or a name and folder):
+Drives: on Windows, C:\ and D:\ are shown if they exist. To change that, add this to your settings file (a drive letter, or a name and folder):
 
        "explorer": { "drives": ["C:\\", "D:\\"] }
 
+## Apps in the side panel
+List the programs you want one click away in your settings file. They appear under **Apps** in the Explorer side panel, on the Explorer page and in Ctrl+K search. `types` is optional: files of those types get an **Open with** button in the Explorer.
+
+       "apps": [
+         { "name": "Typora", "path": "D:\\Program Files\\Typora\\Typora.exe", "types": [".md"] },
+         { "name": "Acrobat", "path": "D:\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe", "types": [".pdf"] },
+         { "name": "Chrome", "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "types": [".html", ".htm"] }
+       ]
+
+The path must be the program's `.exe` file. Only programs in this list can be started, and the Explorer itself still never runs programs or scripts.
+
 ## Light and dark, and the logo
-The sun/moon button in the header switches between light and dark; your choice is remembered. Until you choose, the app follows Windows. If a file called `transformHub.png` sits in the app folder, it shows at the top of the left rail and is used as the window icon. The logo and icon files are not stored in this repository.
+The sun/moon button in the header switches between light and dark; your choice is remembered. Until you choose, the app follows Windows. If `thumbnail.png` (or `transformHub.png`) sits in the app folder, it shows at the top of the left rail. The window and taskbar icon is `thumbnail.ico` if present (or `transformHub.ico`, then the PNG); `Make-Icon.ps1` builds the .ico from the PNG. The logo and icon files are not stored in this repository.
 
 ## Microsoft To Do in Tasks (experimental, read-only)
 Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page and the side panel (titles only, read-only; tick them off in To Do). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
@@ -60,7 +71,7 @@ The committed default only has an example project. To use your own list, edit th
 (the cog in the left rail opens it). A copy of your settings kept in this folder as
 `config.personal.json` (or any `config.*.json` except the default) is ignored by git, so real folder names and links never go to GitHub.
 
-Settings you can change: `userName`, `calendarFeeds`, `projects` (id, name, folder), `explorer` (drives), `arcaneUrl`, `dataDir`, `msTodo` and the `sections` list.
+Settings you can change: `userName`, `calendarFeeds`, `projects` (id, name, folder), `explorer` (drives), `apps`, `arcaneUrl`, `dataDir`, `msTodo` and the `sections` list.
 Restart the app after editing. Upgrading from 0.1: your old settings are kept as
 `config.v1.bak.json` and replaced with the new layout. The old "AI Projects" tab is renamed Explorer automatically; a name you chose yourself is kept.
 Favourites you star are remembered per person in `ui-state.json` next to the settings file.
