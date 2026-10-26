@@ -3,6 +3,9 @@
   "startSection": "home",
   "dataDir": null,
   "arcaneUrl": "http://127.0.0.1:7600",
+  "explorer": {
+    "drives": ["C:\\"]
+  },
   "projects": [
     {
       "id": "example",
@@ -27,8 +30,8 @@
     },
     {
       "id": "projects",
-      "label": "AI Projects",
-      "icon": "briefcase",
+      "label": "Explorer",
+      "icon": "folder",
       "type": "local",
       "file": "renderer/projects.html"
     },

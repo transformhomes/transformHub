@@ -1,4 +1,4 @@
-// Bridge for the built-in pages (Home, AI Projects, Tasks, Calendar) only.
+// Bridge for the built-in pages (Home, Explorer, Tasks, Calendar) only.
 // Web sections (Outlook, Teams, Claude...) never get this.
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('cc', {
   refreshFeeds: () => ipcRenderer.invoke('feeds:refresh'),
   onFeedsChanged: (fn) => ipcRenderer.on('feeds:changed', (_e, s) => fn(s)),
   getProjects: () => ipcRenderer.invoke('projects:list'),
+  getRoots: () => ipcRenderer.invoke('explorer:roots'),
+  toggleFav: (root, rel, name) => ipcRenderer.invoke('explorer:fav', root, rel, name),
   openFolder: (id) => ipcRenderer.invoke('projects:open-folder', id),
   openArcane: () => ipcRenderer.invoke('projects:open-arcane'),
   go: (sectionId) => ipcRenderer.send('cc:select', sectionId),

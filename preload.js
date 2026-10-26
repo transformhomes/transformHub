@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('cc', {
   refreshFeeds: () => ipcRenderer.invoke('feeds:refresh'),
   onFeedsChanged: on('feeds:changed'),
   getProjects: () => ipcRenderer.invoke('projects:list'),
+  getRoots: () => ipcRenderer.invoke('explorer:roots'),
+  toggleFav: (root, rel, name) => ipcRenderer.invoke('explorer:fav', root, rel, name),
   getSettings: () => ipcRenderer.invoke('app:settings'),
   openArcane: () => ipcRenderer.invoke('projects:open-arcane'),
 });

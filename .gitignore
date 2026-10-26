@@ -3,7 +3,8 @@ dist/
 *.bak
 *.corrupt-*
 data/
-# personal settings (project names and folder paths) stay local
-config.dale.json
+# personal settings (real folder names, links) stay local
 config.json
+config.*.json
+!config.default.json
 *.zip

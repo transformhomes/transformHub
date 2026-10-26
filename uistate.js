@@ -1,4 +1,4 @@
-// Small remembered interface state: is the activity panel open, and which items were used recently.
+// Small remembered interface state: panel open or closed, theme, recently used items and favourite folders.
 const fs = require('fs');
 const path = require('path');
 
@@ -8,7 +8,17 @@ function normalise(s) {
   const src = s && typeof s === 'object' ? s : {};
   const recents = Array.isArray(src.recents) ? src.recents.filter((k) => typeof k === 'string' && KEY_RE.test(k)) : [];
   const theme = ['light', 'dark', 'system'].includes(src.theme) ? src.theme : 'system';
-  return { theme, feedOpen: src.feedOpen !== false, recents: [...new Set(recents)].slice(0, 5) };
+  const favs = [];
+  const seenFav = new Set();
+  for (const f of Array.isArray(src.favs) ? src.favs : []) {
+    if (!f || typeof f.root !== 'string' || typeof f.rel !== 'string' || typeof f.name !== 'string') continue;
+    if (f.root.length > 100 || f.rel.length > 500 || !f.name.trim() || /[\u0000-\u001f\\]/.test(f.rel)) continue;
+    const key = f.root + '\u0001' + f.rel;
+    if (seenFav.has(key) || favs.length >= 50) continue;
+    seenFav.add(key);
+    favs.push({ root: f.root, rel: f.rel, name: f.name.trim().slice(0, 80) });
+  }
+  return { theme, feedOpen: src.feedOpen !== false, recents: [...new Set(recents)].slice(0, 5), favs };
 }
 
 function createUiState(dir) {
