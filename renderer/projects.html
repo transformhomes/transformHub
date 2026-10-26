@@ -2,16 +2,33 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:">
 <title>AI Projects</title>
 <link rel="stylesheet" href="shared.css">
 <style>
   .proj { text-align:left; display:block; width:100%; cursor:pointer; }
-  .proj:hover { border-color:var(--accent); background:#1a1f27; }
+  .proj:hover { border-color:var(--accent); background:var(--hover); }
   .proj .name { font-weight:600; font-size:15px; margin-bottom:4px; }
   .proj .path { color:var(--muted); font-size:12px; word-break:break-all; margin-bottom:10px; }
-  .back { margin-bottom:14px; }
-  .actions { margin:14px 0 6px; }
+  .crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; margin-bottom:12px; color:var(--muted); }
+  .crumbs button { padding:3px 8px; }
+  .crumbs .here { color:var(--fg); font-weight:600; padding:3px 8px; }
+  .actions { margin:12px 0 14px; }
+  .files { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .frow { display:grid; grid-template-columns:minmax(0,1fr) 130px 80px; gap:12px; align-items:center; width:100%; text-align:left;
+    background:transparent; border:0; border-bottom:1px solid var(--line); border-radius:0; padding:8px 12px; cursor:pointer; }
+  .frow:last-child { border-bottom:0; }
+  .frow:hover { background:var(--hover); }
+  .frow.head { cursor:default; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; background:var(--panel); }
+  .frow.head:hover { background:var(--panel); }
+  .frow .n { display:flex; align-items:center; gap:10px; min-width:0; }
+  .frow .n span.t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frow .m { color:var(--muted); font-size:12.5px; }
+  .ico { flex:none; width:16px; height:12px; border-radius:3px; border:1.5px solid var(--muted); }
+  .ico.dir { border-color:var(--accent); background:var(--accent-bg); }
+  pre.preview { margin:12px 0 0; padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:auto; max-height:calc(100vh - 260px);
+    font:12.5px/1.55 Consolas, "Cascadia Mono", monospace; white-space:pre-wrap; word-break:break-word; user-select:text; }
+  img.preview { max-width:100%; max-height:calc(100vh - 260px); margin-top:12px; border-radius:8px; border:1px solid var(--line); background:var(--well); }
 </style>
 </head>
 <body>
@@ -19,96 +36,174 @@
 
 <script src="common.js"></script>
 <script>
-  let openId = null;      // project shown in the focus view, or null for the list
-  let launchMsg = null;   // { ok, text } shown under the launch buttons
-
   const root = document.getElementById('root');
   const activeCount = (pid) => App.data.tasks.filter((t) => !t.done && t.project === pid).length;
+  const show = (...nodes) => root.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false));
 
-  function renderList() {
-    root.replaceChildren(
-      h('h1', { text: 'AI Projects' }),
-      h('p', { class: 'sub', text: 'Pick one project to work on. Open it to see its tasks and launch Antigravity in its folder.' }));
+  let loc = { project: null, path: '' };   // where we are
+  let view = null;                        // what loaded for that place
+  let note = null;                        // { ok, text } message under the buttons
+  let seq = 0;
+  let started = false;
+
+  function goTo(project, path) { window.cc.navigate({ section: 'projects', project: project || '', path: path || '' }); }
+
+  function sizeLabel(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  const dateLabel = (ms) => (ms ? new Date(ms).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const join = (a, b) => (a ? a + '/' + b : b);
+  const parentOf = (p) => p.split('/').slice(0, -1).join('/');
+
+  async function load() {
+    const my = ++seq;
+    view = null;
+    if (!loc.project || !App.projects.some((x) => x.id === loc.project)) { render(); return; }
+    const r = await window.cc.listDir(loc.project, loc.path);
+    if (my !== seq) return;
+    if (!r || !r.ok) view = { kind: 'error', error: (r && r.error) || 'Could not open this.' };
+    else if (r.isFile) {
+      const f = await window.cc.readFile(loc.project, loc.path);
+      if (my !== seq) return;
+      view = { kind: 'file', info: r, file: f };
+    } else view = { kind: 'dir', entries: r.entries, truncated: r.truncated };
+    render();
+  }
+
+  function applyLoc(p) {
+    loc = { project: (p && typeof p.project === 'string' && p.project) || null, path: (p && typeof p.path === 'string' && p.path) || '' };
+    note = null;
+    load();
+  }
+
+  async function act(fn, okText) {
+    const r = await fn();
+    note = r && r.ok ? { ok: true, text: okText } : { ok: false, text: (r && r.error) || 'Could not do that.' };
+    render();
+  }
+
+  function renderAll() {
+    const children = [h('h1', { text: 'AI Projects' }), h('p', { class: 'sub', text: 'Pick a project, or browse its folders in the panel on the left.' })];
     if (!App.projects.length) {
-      root.append(h('div', { class: 'empty', text: 'No projects yet. Add them under "projects" in the settings file (cog in the left rail).' }));
-      return;
+      children.push(h('div', { class: 'empty', text: 'No projects yet. Add them under "projects" in the settings file (cog in the left rail).' }));
+    } else {
+      const grid = h('div', { class: 'grid' });
+      App.projects.forEach((p) => {
+        const n = activeCount(p.id);
+        grid.append(h('button', { class: 'card proj', onclick: () => goTo(p.id, '') },
+          h('div', { class: 'name', text: p.name }),
+          h('div', { class: 'path', text: p.path }),
+          h('div', { class: 'row' },
+            App.data.focusProject === p.id && h('span', { class: 'tag accent', text: 'Focus' }),
+            h('span', { class: 'tag', text: n + (n === 1 ? ' open task' : ' open tasks') }))));
+      });
+      children.push(grid);
     }
-    const grid = h('div', { class: 'grid' });
-    App.projects.forEach((p) => {
-      const n = activeCount(p.id);
-      const isFocus = App.data.focusProject === p.id;
-      grid.append(h('button', { class: 'card proj', onclick: () => { openId = p.id; launchMsg = null; render(); } },
-        h('div', { class: 'name', text: p.name }),
-        h('div', { class: 'path', text: p.path }),
-        h('div', { class: 'row' },
-          isFocus && h('span', { class: 'tag accent', text: 'Focus' }),
-          h('span', { class: 'tag', text: n + (n === 1 ? ' open task' : ' open tasks') }))));
-    });
-    root.append(grid);
+    show(children);
   }
 
-  async function launch(kind, id) {
-    launchMsg = { ok: true, text: 'Launching…' };
-    renderFocus();
-    const fn = kind === 'agent' ? window.cc.openAgent : window.cc.openFolder;
-    const r = await fn(id);
-    launchMsg = r && r.ok
-      ? { ok: true, text: kind === 'agent' ? 'Antigravity is opening this folder.' : 'Folder opened.' }
-      : { ok: false, text: (r && r.error) || 'Could not open.' };
-    renderFocus();
+  function crumbs(p) {
+    const segs = loc.path ? loc.path.split('/') : [];
+    const bar = h('div', { class: 'crumbs', role: 'navigation', 'aria-label': 'Folder path' },
+      h('button', { class: 'ghost', onclick: () => goTo('', ''), text: 'All projects' }), '›');
+    if (!segs.length) bar.append(h('span', { class: 'here', text: p.name }));
+    else {
+      bar.append(h('button', { class: 'ghost', onclick: () => goTo(p.id, ''), text: p.name }));
+      segs.forEach((seg, i) => {
+        bar.append('›');
+        if (i === segs.length - 1) bar.append(h('span', { class: 'here', text: seg }));
+        else bar.append(h('button', { class: 'ghost', onclick: () => goTo(p.id, segs.slice(0, i + 1).join('/')), text: seg }));
+      });
+    }
+    return bar;
   }
 
-  function renderFocus() {
-    const p = App.projects.find((x) => x.id === openId);
-    if (!p) { openId = null; renderList(); return; }
-    const isFocus = App.data.focusProject === p.id;
+  function noteBox() { return note && h('div', { class: 'msg ' + (note.ok ? 'ok' : 'err'), text: note.text }); }
+
+  function tasksBlock(p) {
     const tasks = sortTasks(App.data.tasks.filter((t) => t.project === p.id));
     const active = tasks.filter((t) => !t.done);
     const done = tasks.filter((t) => t.done);
-
     // Keep a half-typed task if this page re-draws because something else changed.
     const prevTitle = document.getElementById('pTitle');
     const prevDue = document.getElementById('pDue');
     const keepTitle = prevTitle && prevTitle.dataset.project === p.id ? prevTitle.value : '';
     const keepDue = prevDue && prevDue.dataset.project === p.id ? prevDue.value : '';
     const hadFocus = prevTitle && document.activeElement === prevTitle;
-
     const input = h('input', { id: 'pTitle', 'data-project': p.id, type: 'text', class: 'grow', maxlength: '500', placeholder: 'Add a task for ' + p.name, 'aria-label': 'New task for ' + p.name, value: keepTitle });
     const due = h('input', { id: 'pDue', 'data-project': p.id, type: 'date', 'aria-label': 'Due date', value: keepDue });
     const form = h('form', { class: 'row', autocomplete: 'off', onsubmit: async (e) => {
       e.preventDefault();
       if (!input.value.trim()) { input.focus(); return; }
-      const title = input.value;
-      const dueValue = due.value;
-      input.value = '';
-      due.value = '';
+      const title = input.value; const dueValue = due.value;
+      input.value = ''; due.value = '';
       await addTask(title, p.id, dueValue);
     } }, input, due, h('button', { class: 'primary', type: 'submit', text: 'Add' }));
-
-    root.replaceChildren(
-      h('button', { class: 'ghost back', onclick: () => { openId = null; launchMsg = null; render(); } }, '‹ All projects'),
-      h('h1', { text: p.name }),
-      h('p', { class: 'sub', text: p.path }),
-      h('div', { class: 'row actions' },
-        h('button', { class: 'primary', onclick: () => launch('agent', p.id) }, 'Open in Antigravity'),
-        h('button', { onclick: () => launch('folder', p.id) }, 'Open folder'),
-        h('button', { onclick: () => window.cc.openArcane() }, 'Arcane terminals'),
-        h('button', {
-          class: isFocus ? '' : 'ghost',
-          onclick: () => App.save({ focusProject: isFocus ? null : p.id }),
-        }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus')),
-      launchMsg && h('div', { class: 'msg ' + (launchMsg.ok ? 'ok' : 'err'), text: launchMsg.text }),
-      h('h2', { style: 'margin-top:26px', text: 'Tasks for this project' }),
+    if (hadFocus) setTimeout(() => input.focus(), 0);
+    return [
+      h('h2', { style: 'margin-top:28px', text: 'Tasks for this project' }),
       form,
       active.length ? active.map(taskRow) : h('div', { class: 'empty', text: 'No open tasks.' }),
       done.length > 0 && h('div', { class: 'group-title', text: 'Done (' + done.length + ')' }),
-      done.map(taskRow));
-    if (hadFocus) input.focus();
+      done.map(taskRow),
+    ];
   }
 
-  function render() { openId ? renderFocus() : renderList(); }
+  function renderDir(p) {
+    const atRoot = !loc.path;
+    const isFocus = App.data.focusProject === p.id;
+    const actions = h('div', { class: 'row actions' },
+      h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened in Explorer.') }, 'Open in Explorer'),
+      atRoot && h('button', { onclick: () => window.cc.openArcane() }, 'Arcane terminals'),
+      atRoot && h('button', { class: isFocus ? '' : 'ghost', onclick: () => App.save({ focusProject: isFocus ? null : p.id }) }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus'));
 
-  App.init(render);
+    const list = h('div', { class: 'files', role: 'list' },
+      h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
+    if (!view.entries.length) list.append(h('div', { class: 'empty', style: 'padding:14px', text: 'This folder is empty.' }));
+    view.entries.forEach((en) => {
+      list.append(h('button', { class: 'frow', role: 'listitem', onclick: () => goTo(p.id, join(loc.path, en.name)) },
+        h('span', { class: 'n' }, h('span', { class: 'ico' + (en.dir ? ' dir' : ''), 'aria-hidden': 'true' }), h('span', { class: 't', text: en.name })),
+        h('span', { class: 'm', text: dateLabel(en.mtime) }),
+        h('span', { class: 'm', text: en.dir ? '' : sizeLabel(en.size) })));
+    });
+
+    show(crumbs(p), h('h1', { text: loc.path ? loc.path.split('/').pop() : p.name }), h('p', { class: 'sub', text: p.path + (loc.path ? '\\' + loc.path.replace(/\//g, '\\') : '') }),
+      actions, noteBox(), list,
+      view.truncated && h('div', { class: 'muted', style: 'margin-top:8px', text: 'Showing the first 1000 items.' }),
+      atRoot && tasksBlock(p));
+  }
+
+  function renderFile(p) {
+    const f = view.file;
+    const name = loc.path.split('/').pop();
+    let body;
+    if (!f || !f.ok) body = h('div', { class: 'msg err', text: (f && f.error) || 'Could not read this file.' });
+    else if (f.kind === 'text') body = [h('pre', { class: 'preview', text: f.text }), f.truncated && h('div', { class: 'muted', style: 'margin-top:8px', text: 'Showing the first part of this file. Open it to see the rest.' })];
+    else if (f.kind === 'image') body = h('img', { class: 'preview', src: f.dataUrl, alt: name });
+    else body = h('div', { class: 'empty', text: f.note || 'No preview for this type of file. Use Open to view it in its own app.' });
+    show(crumbs(p), h('h1', { style: 'word-break:break-word', text: name }), h('p', { class: 'sub', text: sizeLabel(view.info.size) + ' · modified ' + dateLabel(view.info.mtime) }),
+      h('div', { class: 'row actions' },
+        h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened.') }, 'Open'),
+        h('button', { onclick: () => act(() => window.cc.revealFile(p.id, loc.path), 'Shown in Explorer.') }, 'Show in Explorer'),
+        h('button', { class: 'ghost', onclick: () => goTo(p.id, parentOf(loc.path)) }, '‹ Back to folder')),
+      noteBox(), body);
+  }
+
+  function render() {
+    const p = App.projects.find((x) => x.id === loc.project);
+    if (!loc.project || !p) return renderAll();
+    if (!view) return show(h('div', { class: 'empty', text: 'Loading…' }));
+    if (view.kind === 'error') {
+      return show(crumbs(p), h('div', { class: 'msg err', text: view.error }), h('button', { onclick: () => goTo(p.id, '') }, 'Back to project'));
+    }
+    if (view.kind === 'file') return renderFile(p);
+    renderDir(p);
+  }
+
+  window.cc.onNavigate((p) => applyLoc(p));
+  App.init(() => { if (!started) { started = true; load(); } else render(); });
 </script>
 </body>
 </html>
