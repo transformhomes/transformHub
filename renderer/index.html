@@ -227,6 +227,7 @@
   const expanded = new Set();
   const children = new Map();   // key -> entries | 'loading' | { error }
   let sel = { project: null, path: '' };
+  let collapsing = null;       // the folder the user just collapsed by clicking its name, so opening it does not re-expand it
   const tkey = (project, rel) => project + '\u0001' + rel;
   const joinPath = (a, b) => (a ? a + '/' + b : b);
 
@@ -246,7 +247,8 @@
     name.title = label;
     if (selected) name.setAttribute('aria-current', 'true');
     name.addEventListener('click', () => {
-      if (isDir && !expanded.has(k)) toggle(project, rel, true);
+      // Clicking a folder's name opens it and expands it; clicking it again collapses it.
+      if (isDir) { if (expanded.has(k)) { collapsing = k; toggle(project, rel); } else toggle(project, rel, true); }
       window.cc.navigate({ section: 'projects', project, path: rel });
     });
     row.append(chev, name);
@@ -268,7 +270,7 @@
     }
   }
 
-  let roots = { projects: [], drives: [], favs: [] };
+  let roots = { projects: [], drives: [], favs: [], apps: [] };
   const isFav = (project, rel) => roots.favs.some((f) => f.root === project && f.rel === rel);
 
   function renderTree() {
@@ -281,6 +283,22 @@
     t.append(el('div', 'tgrp', 'This PC'));
     if (!roots.drives.length) t.append(el('div', 'tmsg', 'No drives are set up. Add them under "explorer" in the settings file.'));
     roots.drives.forEach((d) => addNode(t, d.id, '', d.name, true, 0));
+    if ((roots.apps || []).length) {
+      t.append(el('div', 'tgrp', 'Apps'));
+      roots.apps.forEach((a) => {
+        const row = el('div', 'tn');
+        row.style.paddingLeft = '4px';
+        const b = el('button', 'tname', a.name);
+        b.style.paddingLeft = '26px';
+        b.title = 'Open ' + a.name;
+        b.addEventListener('click', async () => {
+          const r = await window.cc.launchApp(a.id);
+          if (!r || !r.ok) { const m = el('div', 'tmsg', (r && r.error) || 'Could not start ' + a.name + '.'); row.after(m); setTimeout(() => m.remove(), 6000); }
+        });
+        row.append(b);
+        t.append(row);
+      });
+    }
   }
 
   async function refreshRoots() {
@@ -307,8 +325,11 @@
   // Open the folders leading to a place, mark it, and expand it if it is a folder.
   async function reveal(project, path) {
     sel = { project, path };
+    const keepClosed = collapsing === tkey(project, path);
+    collapsing = null;
     const segs = path ? path.split('/') : [];
     let rel = '';
+    if (!path && keepClosed) { renderTree(); return; }
     expanded.add(tkey(project, ''));
     if (!Array.isArray(children.get(tkey(project, '')))) await loadDir(project, '');
     for (let i = 0; i < segs.length - 1; i++) {
@@ -316,7 +337,7 @@
       expanded.add(tkey(project, rel));
       if (!Array.isArray(children.get(tkey(project, rel)))) await loadDir(project, rel);
     }
-    if (path) {
+    if (path && !keepClosed) {
       const r = await window.cc.listDir(project, path);
       if (r && r.ok && !r.isFile) {
         expanded.add(tkey(project, path));
