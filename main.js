@@ -50,6 +50,8 @@ function cleanSections(list, defaults) {
     if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !/^[\w-]{1,30}$/.test(raw.id) || seen.has(raw.id)) { console.error('Skipping a section with a missing or repeated id'); continue; }
     const def = defById.get(raw.id);
     const sec = { id: raw.id, label: String(raw.label || (def && def.label) || raw.id).slice(0, 40), icon: String(raw.icon || (def && def.icon) || 'home').slice(0, 20) };
+    // The AI Projects page is now the Explorer: update the old default name and icon, keep any custom ones.
+    if (raw.id === 'projects') { if (sec.label === 'AI Projects') sec.label = 'Explorer'; if (sec.icon === 'briefcase') sec.icon = 'folder'; }
     let type = raw.type || (raw.file ? 'local' : raw.url ? 'web' : def && def.type);
     if (type === 'disabled') { sec.type = 'disabled'; }
     else if (type === 'local') {
@@ -108,6 +110,41 @@ function findProject(id) {
   return list.find((p) => p && p.id === id && typeof p.path === 'string') || null;
 }
 
+// Drives shown under "This PC" in the Explorer. Settings: "explorer": { "drives": ["C:\\", "D:\\"] }.
+// An entry can also be { "name": "Shared", "path": "..." }. Default on Windows: C:\ only.
+function driveRoots() {
+  const cfg = loadedConfig && loadedConfig.explorer;
+  const list = cfg && Array.isArray(cfg.drives) ? cfg.drives : (process.platform === 'win32' ? ['C:\\'] : []);
+  const out = [];
+  const seen = new Set();
+  for (const d of list.slice(0, 12)) {
+    let id, name, p;
+    if (typeof d === 'string' && /^[A-Za-z]:[\\/]?$/.test(d.trim())) {
+      const letter = d.trim()[0].toUpperCase();
+      id = 'drive:' + letter; name = 'Local Disk (' + letter + ':)'; p = letter + ':\\';
+    } else if (d && typeof d === 'object' && typeof d.path === 'string' && path.isAbsolute(d.path) && typeof d.name === 'string' && d.name.trim()) {
+      name = d.name.trim().slice(0, 40); id = 'drive:' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'disk'); p = d.path;
+    } else continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name, path: p });
+  }
+  return out;
+}
+
+// A browsable place: a configured project folder or a drive. Everything else resolves inside one of these.
+function findRoot(id) {
+  if (typeof id !== 'string') return null;
+  if (id.startsWith('drive:')) { const d = driveRoots().find((x) => x.id === id); return d ? { path: d.path, kind: 'drive', name: d.name } : null; }
+  const p = findProject(id);
+  return p ? { path: p.path, kind: 'project', name: String(p.name || id) } : null;
+}
+
+// Never shown or opened on a drive: system folders, sign-in data and key stores.
+const BLOCK_NAMES = new Set(['appdata', 'windows', 'program files', 'program files (x86)', 'programdata', '$recycle.bin', 'recovery', 'system volume information',
+  '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', 'config.msi', 'pagefile.sys', 'hiberfil.sys', 'swapfile.sys']);
+const isBlockedName = (n) => { const l = String(n).toLowerCase(); return BLOCK_NAMES.has(l) || l.startsWith('ntuser.'); };
+
 
 // ---- Project file browser (read-only) ----------------------------------------------------------
 // Everything is resolved inside a configured project folder: no "..", no symlinks out, no drive letters.
@@ -127,8 +164,8 @@ function safeRel(rel) {
 }
 
 function resolveInProject(id, rel) {
-  const proj = findProject(id);
-  if (!proj) return { error: 'Unknown project.' };
+  const proj = findRoot(id);
+  if (!proj) return { error: 'Unknown folder.' };
   const clean = safeRel(rel);
   if (clean === null) return { error: 'That path is not allowed.' };
   let root;
@@ -137,8 +174,13 @@ function resolveInProject(id, rel) {
   let real;
   try { real = fs.realpathSync(target); } catch { return { error: 'Not found.' }; }
   const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
-  if (norm(real) !== norm(root) && !norm(real).startsWith(norm(root) + path.sep)) return { error: 'That path is outside the project.' };
-  return { root, real, clean };
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep; // a drive root such as C:\ already ends with a separator
+  if (norm(real) !== norm(root) && !norm(real).startsWith(norm(rootWithSep))) return { error: 'That path is outside this folder.' };
+  if (proj.kind === 'drive') {
+    const inside = norm(real) === norm(root) ? [] : real.slice(rootWithSep.length).split(path.sep).filter(Boolean);
+    if (clean.split('/').some(isBlockedName) || inside.some(isBlockedName)) return { error: 'That folder is not available here.' };
+  }
+  return { root, real, clean, kind: proj.kind };
 }
 
 function listDir(id, rel) {
@@ -152,6 +194,7 @@ function listDir(id, rel) {
   const entries = [];
   for (const d of dirents) {
     if (HIDE_NAMES.has(d.name) || d.isSymbolicLink() || (!d.isDirectory() && !d.isFile())) continue;
+    if (r.kind === 'drive' && isBlockedName(d.name)) continue;
     let size = 0, mtime = 0;
     if (entries.length < 1500) {
       try { const s = fs.statSync(path.join(r.real, d.name)); size = d.isFile() ? s.size : 0; mtime = s.mtimeMs; } catch { /* leave blank */ }
@@ -587,6 +630,28 @@ if (!app.requestSingleInstanceLock()) {
       select(p.section, Object.keys(params).length ? params : undefined);
       if (win && !win.isDestroyed()) win.webContents.send('cc:nav', { section: p.section, ...params });
     });
+    ipcMain.handle('explorer:roots', (e) => {
+      if (!isLocalSender(e)) return null;
+      const projects = (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
+      const favs = ui.get().favs.filter((f) => findRoot(f.root));
+      return { projects, drives: driveRoots(), favs };
+    });
+    ipcMain.handle('explorer:fav', (e, root, rel, name) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const r = resolveInProject(root, rel);
+      if (r.error) return { ok: false, error: r.error };
+      if (!r.clean) return { ok: false, error: 'Pick a folder inside it.' };
+      let isDir = false;
+      try { isDir = fs.statSync(r.real).isDirectory(); } catch { /* handled below */ }
+      if (!isDir) return { ok: false, error: 'Only folders can be favourites.' };
+      const favs = ui.get().favs;
+      const has = favs.some((f) => f.root === root && f.rel === r.clean);
+      const label = String(name || '').trim().slice(0, 80) || r.clean.split('/').pop();
+      const next = has ? favs.filter((f) => !(f.root === root && f.rel === r.clean)) : [...favs, { root, rel: r.clean, name: label }];
+      ui.set({ favs: next });
+      if (win && !win.isDestroyed()) win.webContents.send('ui:changed', ui.get());
+      return { ok: true, pinned: !has, favs: ui.get().favs };
+    });
     ipcMain.handle('fs:list', (e, id, rel) => (isLocalSender(e) ? listDir(id, rel) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('fs:read', (e, id, rel) => (isLocalSender(e) ? readPreview(id, rel) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('fs:open', async (e, id, rel) => {
@@ -595,7 +660,7 @@ if (!app.requestSingleInstanceLock()) {
       if (r.error) return { ok: false, error: r.error };
       let isDir = false;
       try { isDir = fs.statSync(r.real).isDirectory(); } catch { return { ok: false, error: 'Not found.' }; }
-      if (!isDir && RISKY_EXT.has(path.extname(r.real).toLowerCase())) return { ok: false, error: 'For safety, programs and scripts are not run from here. Use Show in Explorer instead.' };
+      if (!isDir && RISKY_EXT.has(path.extname(r.real).toLowerCase())) return { ok: false, error: 'For safety, programs and scripts are not run from here. Use Show in File Explorer instead.' };
       const err = await shell.openPath(r.real);
       return err ? { ok: false, error: err } : { ok: true };
     });
