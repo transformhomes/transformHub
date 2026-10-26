@@ -23,7 +23,7 @@
   <div id="focusSlot"></div>
   <div class="cols" id="cols"></div>
   <div class="row links" id="links"></div>
-  <p class="muted" style="margin-top:22px;font-size:12.5px">Tasks and events here are the ones saved in this app. Outlook, Teams and OneDrive items stay in their own tabs for now.</p>
+  <p class="muted" style="margin-top:22px;font-size:12.5px">Tasks are the ones saved in this app. Events include your linked Outlook calendar when one is set up. Mail, Teams and OneDrive stay in their own tabs.</p>
 </div>
 
 <script src="common.js"></script>
@@ -52,8 +52,8 @@
     const tasks = App.data.tasks.filter((t) => !t.done);
     const overdue = sortTasks(tasks.filter((t) => t.due && t.due < today));
     const dueToday = tasks.filter((t) => t.due === today);
-    const todayEvents = sortEvents(App.data.events.filter((e) => e.date === today));
-    const soon = sortEvents(App.data.events.filter((e) => e.date > today && e.date <= addDays(today, 7)));
+    const todayEvents = sortEvents(allEvents().filter((e) => e.date === today));
+    const soon = sortEvents(allEvents().filter((e) => e.date > today && e.date <= addDays(today, 7)));
 
     const focusSlot = el('focusSlot');
     focusSlot.replaceChildren();

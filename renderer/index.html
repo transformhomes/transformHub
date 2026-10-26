@@ -2,32 +2,104 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src data:; script-src 'self' 'unsafe-inline'">
 <title>TH Command Centre</title>
+<link rel="stylesheet" href="theme.css">
 <style>
-  :root { --bg:#0f1115; --rail:#14171d; --fg:#c9d1d9; --muted:#6b7480; --accent:#4c9bff; --hover:#1f242c; }
-  * { box-sizing: border-box; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
-    font-family: "Segoe UI", system-ui, sans-serif; overflow:hidden; user-select:none; }
-  #rail { width:64px; height:100%; background:var(--rail); border-right:1px solid #232830;
-    display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:6px; }
-  .spacer { flex:1; }
-  button.item { position:relative; width:44px; height:44px; border:0; border-radius:10px; background:transparent;
-    color:var(--muted); display:grid; place-items:center; cursor:pointer; }
+  /* Layout numbers must match RAIL_W / FEED_W / HEADER_H / GAP / RADIUS in main.js */
+  :root { --rail-w:64px; --feed-w:300px; --header-h:52px; --gap:8px; --radius:12px; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--frame); color:var(--fg); font-family:"Segoe UI", system-ui, sans-serif; font-size:13.5px; overflow:hidden; user-select:none; }
+  button { font:inherit; color:inherit; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+
+  #rail { position:fixed; left:0; top:0; bottom:0; width:var(--rail-w); background:var(--rail); display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:4px; }
+  button.item { position:relative; width:52px; border:0; border-radius:10px; background:transparent; color:var(--muted);
+    display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 0 4px; cursor:pointer; }
+  button.item span { font-size:9.5px; line-height:1.1; max-width:56px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  button.item svg { color:var(--ic, var(--muted)); }
+  button.item img.fav { width:22px; height:22px; object-fit:contain; border-radius:5px; flex:none; }
   button.item:hover { background:var(--hover); color:var(--fg); }
-  button.item.active { background:var(--hover); color:var(--accent); }
-  button.item.active::before { content:""; position:absolute; left:-10px; top:10px; bottom:10px; width:3px;
-    border-radius:0 3px 3px 0; background:var(--accent); }
+  button.item[aria-current="page"] { background:var(--hover); color:var(--accent); }
+  button.item[aria-current="page"]::before { content:""; position:absolute; left:-6px; top:10px; bottom:10px; width:3px; border-radius:0 3px 3px 0; background:var(--accent); }
   button.item:disabled { opacity:.35; cursor:not-allowed; }
-  svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
-  .tip { position:fixed; left:70px; padding:5px 9px; border-radius:6px; background:#232830; color:var(--fg);
-    font-size:12px; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity .1s; z-index:10; }
-  .tip.show { opacity:1; }
+  svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+  button.logo { width:44px; height:44px; border:0; background:transparent; padding:0; margin:2px 0 8px; border-radius:10px; cursor:pointer; flex:none; }
+  button.logo img { width:100%; height:100%; object-fit:contain; border-radius:8px; display:block; }
+  button.logo:hover { background:var(--hover); }
+  .spacer { flex:1; }
+
+  #feed { position:fixed; left:var(--rail-w); top:0; bottom:0; width:var(--feed-w); background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  body.feed-closed #feed { display:none; }
+  #feed h2 { margin:0; padding:0 14px; height:var(--header-h); display:flex; align-items:center; font-size:14px; font-weight:600; flex:none; }
+  #feedBody { flex:1; overflow:auto; padding:0 10px 16px; user-select:text; }
+  .grp { margin:14px 4px 6px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .grp.over { color:var(--danger); }
+  .fi { display:flex; gap:8px; align-items:flex-start; width:100%; text-align:left; border:0; background:transparent; padding:7px 8px; border-radius:8px; cursor:pointer; }
+  .fi:hover { background:var(--hover); }
+  .fi .when { color:var(--muted); font-size:12px; min-width:58px; flex:none; }
+  .fi .t { flex:1; word-break:break-word; }
+  .fi.done .t { text-decoration:line-through; color:var(--muted); }
+  .empty { color:var(--muted); padding:6px 8px; }
+  #quick { display:flex; gap:6px; padding:0 10px 10px; flex:none; }
+  #quick input { flex:1; min-width:0; background:var(--stage); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit; }
+  #quick button { background:var(--accent); color:var(--on-accent); border:0; border-radius:8px; padding:0 12px; font-weight:600; cursor:pointer; }
+
+  #tree { flex:1; overflow:auto; padding:0 6px 16px; user-select:none; }
+  #tree[hidden] { display:none; }
+  .tn { display:flex; align-items:center; border-radius:6px; }
+  .tn:hover { background:var(--hover); }
+  .tn.sel { background:var(--accent-bg); }
+  .tn button { border:0; background:transparent; cursor:pointer; color:var(--fg); padding:5px 4px; border-radius:6px; }
+  .tn .chev { width:22px; flex:none; color:var(--muted); text-align:center; padding:5px 0; }
+  .tn .tname { flex:1; min-width:0; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tn.file .tname { color:var(--muted); }
+  .tn.root .tname { font-weight:600; }
+  .tn.sel .tname { color:var(--fg); }
+  .tmsg { color:var(--muted); font-size:12px; padding:4px 8px; }
+
+  #header { position:fixed; top:0; right:0; height:var(--header-h); left:calc(var(--rail-w) + var(--feed-w)); display:flex; align-items:center; gap:8px; padding:0 var(--gap) 0 12px; }
+  body.feed-closed #header { left:var(--rail-w); }
+  #crumb { flex:1; min-width:0; display:flex; align-items:center; gap:6px; color:var(--muted); overflow:hidden; white-space:nowrap; }
+  #crumb b { color:var(--fg); font-weight:600; }
+  .hb { border:0; background:transparent; color:var(--muted); width:34px; height:34px; border-radius:8px; display:grid; place-items:center; cursor:pointer; }
+  .hb:hover { background:var(--hover); color:var(--fg); }
+  #search { display:flex; align-items:center; gap:8px; width:260px; height:34px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--muted); cursor:pointer; }
+  #search:hover { color:var(--fg); border-color:var(--line-strong); }
+  #search kbd { margin-left:auto; font:inherit; font-size:11px; border:1px solid var(--line); border-radius:4px; padding:0 5px; }
+
+  #stage { position:fixed; top:var(--header-h); right:var(--gap); bottom:var(--gap); left:calc(var(--rail-w) + var(--feed-w) + var(--gap)); background:var(--stage); border:1px solid var(--line); border-radius:var(--radius); pointer-events:none; }
+  body.feed-closed #stage { left:calc(var(--rail-w) + var(--gap)); }
+  @media (prefers-reduced-motion: no-preference) { button.item, .hb, .fi { transition:background .12s, color .12s; } }
 </style>
 </head>
 <body>
 <nav id="rail" aria-label="Sections"></nav>
-<div id="tip" class="tip"></div>
+
+<aside id="feed" aria-label="Side panel">
+  <h2 id="feedTitle">Recent activity</h2>
+  <form id="quick" autocomplete="off">
+    <input id="quickTitle" type="text" maxlength="500" placeholder="Quick add a task" aria-label="Quick add a task">
+    <button type="submit">Add</button>
+  </form>
+  <div id="feedBody"></div>
+  <div id="tree" hidden role="group" aria-label="Project folders"></div>
+</aside>
+
+<header id="header">
+  <button class="hb" id="feedToggle" aria-label="Show or hide activity panel (Ctrl+\)" title="Activity panel (Ctrl+\)">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+  </button>
+  <div id="crumb"></div>
+  <button id="search" aria-label="Search and commands (Ctrl+K)"><svg viewBox="0 0 24 24" style="width:16px;height:16px"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span>Search…</span><kbd>Ctrl K</kbd></button>
+  <button class="hb" id="themeBtn" aria-label="Switch between light and dark"></button>
+  <button class="hb" id="reload" aria-label="Reload this section" title="Reload (Ctrl+R / F5)">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+  </button>
+</header>
+
+<div id="stage" aria-hidden="true"></div>
+
 <script>
   const ICONS = {
     home:     '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
@@ -38,59 +110,275 @@
     chat:     '<path d="M21 12a8 8 0 0 1-11.7 7L4 20l1.1-4.4A8 8 0 1 1 21 12z"/>',
     star:     '<path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.8 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z"/>',
     briefcase:'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/>',
+    check:    '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>',
     users:    '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.3a3.2 3.2 0 0 1 0 5.4M18 14.3c1.8.8 3 2.7 3 5.7"/>',
+    book:     '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
+    chart:    '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    gear:     '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/>',
   };
-  const rail = document.getElementById('rail');
-  const tip = document.getElementById('tip');
+  const svg = (name) => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || ICONS.home) + '</svg>';
+  const $ = (id) => document.getElementById(id);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const ymd = (d) => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  const todayStr = () => ymd(new Date());
+  const parseYmd = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+  const addDays = (s, n) => { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); };
+  const fmtDate = (s) => parseYmd(s).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  function fmtTime(t) { if (!t) return ''; const [hh, mm] = t.split(':').map(Number); return (hh % 12 || 12) + (mm ? ':' + pad2(mm) : '') + (hh >= 12 ? 'pm' : 'am'); }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  let favicons = {};
+  let todo = { enabled: false, tasks: [] };
+  let sections = [], current = null, data = { tasks: [], events: [] }, feeds = { events: [] }, projects = [];
   const buttons = new Map();
 
-  function showTip(btn, text) {
-    const r = btn.getBoundingClientRect();
-    tip.textContent = text;
-    tip.style.top = (r.top + r.height / 2 - 14) + 'px';
-    tip.classList.add('show');
-  }
-
-  function build(sections) {
-    sections.forEach((s) => {
-      const b = document.createElement('button');
-      b.className = 'item';
-      b.innerHTML = '<svg viewBox="0 0 24 24">' + (ICONS[s.icon] || ICONS.home) + '</svg>';
+  function buildRail() {
+    const rail = $('rail');
+    const keepLogo = rail.querySelector('.logo');
+    rail.replaceChildren();
+    if (keepLogo) rail.append(keepLogo);
+    buttons.clear();
+    sections.forEach((s, i) => {
+      const b = el('button', 'item');
+      const fav = s.type === 'web' && favicons[s.id];
+      if (fav) { const im = document.createElement('img'); im.className = 'fav'; im.src = fav; im.alt = ''; b.append(im); }
+      else b.innerHTML = svg(s.icon);
+      if (/^[a-z]{2,12}$/.test(s.icon || '')) b.style.setProperty('--ic', 'var(--ic-' + s.icon + ', var(--muted))');
+      b.append(el('span', null, s.label.replace(/ \(.*\)$/, '')));
+      b.title = s.label + (i < 9 ? '  (Ctrl+' + (i + 1) + ' / Alt+' + (i + 1) + ' in web tabs)' : '');
       b.setAttribute('aria-label', s.label);
       if (s.type === 'disabled') b.disabled = true;
       b.addEventListener('click', () => window.cc.select(s.id));
-      b.addEventListener('mouseenter', () => showTip(b, s.label));
-      b.addEventListener('mouseleave', () => tip.classList.remove('show'));
-      rail.appendChild(b);
+      rail.append(b);
       buttons.set(s.id, b);
     });
-    const spacer = document.createElement('div'); spacer.className = 'spacer'; rail.appendChild(spacer);
-
-    const reload = document.createElement('button');
-    reload.className = 'item'; reload.setAttribute('aria-label', 'Reload this section');
-    reload.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>';
-    reload.addEventListener('click', () => window.cc.reload());
-    reload.addEventListener('mouseenter', () => showTip(reload, 'Reload (Ctrl+R)'));
-    reload.addEventListener('mouseleave', () => tip.classList.remove('show'));
-    rail.appendChild(reload);
-
-    const cfg = document.createElement('button');
-    cfg.className = 'item'; cfg.setAttribute('aria-label', 'Edit settings');
-    cfg.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>';
+    rail.append(el('div', 'spacer'));
+    const cfg = el('button', 'item');
+    cfg.innerHTML = svg('gear');
+    cfg.append(el('span', null, 'Settings'));
+    cfg.title = 'Edit settings file';
+    cfg.setAttribute('aria-label', 'Edit settings file');
     cfg.addEventListener('click', () => window.cc.openConfig());
-    cfg.addEventListener('mouseenter', () => showTip(cfg, 'Edit settings file'));
-    cfg.addEventListener('mouseleave', () => tip.classList.remove('show'));
-    rail.appendChild(cfg);
+    rail.append(cfg);
   }
 
-  window.cc.onSelected((id) => {
-    buttons.forEach((b, key) => b.classList.toggle('active', key === id));
+  function markCurrent() {
+    buttons.forEach((b, id) => { if (id === current) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    const s = sections.find((x) => x.id === current);
+    const crumb = $('crumb');
+    crumb.replaceChildren(el('span', null, 'Transform Homes'), el('span', null, '/'), Object.assign(el('b'), { textContent: s ? s.label.replace(/ \(.*\)$/, '') : '' }));
+  }
+
+  function renderFeed() {
+    const body = $('feedBody');
+    body.replaceChildren();
+    const today = todayStr();
+    const events = [...data.events, ...feeds.events];
+    const tasks = data.tasks;
+    const open = tasks.filter((t) => !t.done);
+    const group = (title, cls) => body.append(el('div', 'grp' + (cls ? ' ' + cls : ''), title));
+    const item = (when, title, onclick, done) => {
+      const b = el('button', 'fi' + (done ? ' done' : ''));
+      b.append(el('span', 'when', when), el('span', 't', title));
+      b.addEventListener('click', onclick);
+      body.append(b);
+    };
+    const proj = (id) => projects.find((p) => p.id === id);
+
+    const overdue = open.filter((t) => t.due && t.due < today).sort((a, b) => a.due.localeCompare(b.due));
+    if (overdue.length) {
+      group('Overdue', 'over');
+      overdue.slice(0, 5).forEach((t) => item(fmtDate(t.due), t.title, () => window.cc.select('tasks')));
+    }
+
+    group('Today');
+    const todayEvents = events.filter((e) => e.date === today).sort((a, b) => (b.allDay - a.allDay) || (a.start || '').localeCompare(b.start || ''));
+    const dueToday = open.filter((t) => t.due === today);
+    if (!todayEvents.length && !dueToday.length) body.append(el('div', 'empty', 'Nothing scheduled today.'));
+    todayEvents.slice(0, 8).forEach((e) => item(e.allDay ? 'All day' : fmtTime(e.start), e.title, () => window.cc.navigate({ section: 'calendar', date: e.date })));
+    dueToday.forEach((t) => item('Task', t.title, () => window.cc.select('tasks')));
+
+    group('Coming up');
+    const soon = events.filter((e) => e.date > today && e.date <= addDays(today, 7)).sort((a, b) => a.date.localeCompare(b.date) || (a.start || '').localeCompare(b.start || ''));
+    if (!soon.length) body.append(el('div', 'empty', 'Nothing in the next 7 days.'));
+    soon.slice(0, 8).forEach((e) => item(fmtDate(e.date), e.title, () => window.cc.navigate({ section: 'calendar', date: e.date })));
+
+    if (todo.enabled) {
+      const openTodo = (todo.tasks || []).filter((t) => !t.done);
+      group('Microsoft To Do (' + openTodo.length + ')');
+      if (!openTodo.length) body.append(el('div', 'empty', todo.status === 'signin' ? 'Sign in to Microsoft to see these.' : 'No open To Do tasks.'));
+      openTodo.slice(0, 5).forEach((t) => item('To Do', t.title, () => window.cc.select('tasks')));
+    }
+
+    group('Recently completed');
+    const done = tasks.filter((t) => t.done && t.doneAt).sort((a, b) => b.doneAt - a.doneAt).slice(0, 4);
+    if (!done.length) body.append(el('div', 'empty', 'No completed tasks yet.'));
+    done.forEach((t) => item(proj(t.project) ? proj(t.project).name.slice(0, 8) : 'Done', t.title, () => window.cc.select('tasks'), true));
+  }
+
+  function applyUi(ui) { document.body.classList.toggle('feed-closed', !(ui && ui.feedOpen)); }
+
+
+  // ---- project folders (shown in the side panel while AI Projects is open) ----
+  const expanded = new Set();
+  const children = new Map();   // key -> entries | 'loading' | { error }
+  let sel = { project: null, path: '' };
+  const tkey = (project, rel) => project + '\u0001' + rel;
+  const joinPath = (a, b) => (a ? a + '/' + b : b);
+
+  function addNode(parent, project, rel, label, isDir, depth) {
+    const k = tkey(project, rel);
+    const open = expanded.has(k);
+    const selected = sel.project === project && sel.path === rel;
+    const row = el('div', 'tn' + (selected ? ' sel' : '') + (isDir ? '' : ' file') + (depth === 0 ? ' root' : ''));
+    row.style.paddingLeft = (4 + depth * 14) + 'px';
+    const chev = el('button', 'chev', isDir ? (open ? '▾' : '▸') : '');
+    if (isDir) {
+      chev.setAttribute('aria-label', (open ? 'Collapse ' : 'Expand ') + label);
+      chev.setAttribute('aria-expanded', open ? 'true' : 'false');
+      chev.addEventListener('click', () => toggle(project, rel));
+    } else { chev.disabled = true; chev.tabIndex = -1; chev.setAttribute('aria-hidden', 'true'); }
+    const name = el('button', 'tname', label);
+    name.title = label;
+    if (selected) name.setAttribute('aria-current', 'true');
+    name.addEventListener('click', () => {
+      if (isDir && !expanded.has(k)) toggle(project, rel, true);
+      window.cc.navigate({ section: 'projects', project, path: rel });
+    });
+    row.append(chev, name);
+    parent.append(row);
+    if (isDir && open) {
+      const kids = children.get(k);
+      if (kids === 'loading' || kids === undefined) parent.append(Object.assign(el('div', 'tmsg', 'Loading…'), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
+      else if (!Array.isArray(kids)) parent.append(Object.assign(el('div', 'tmsg', kids.error), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
+      else if (!kids.length) parent.append(Object.assign(el('div', 'tmsg', 'Empty'), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
+      else kids.forEach((en) => addNode(parent, project, joinPath(rel, en.name), en.name, en.dir, depth + 1));
+    }
+  }
+
+  function renderTree() {
+    const t = $('tree');
+    t.replaceChildren();
+    if (!projects.length) { t.append(el('div', 'tmsg', 'No projects yet. Add them in the settings file.')); return; }
+    projects.forEach((p) => addNode(t, p.id, '', p.name, true, 0));
+  }
+
+  async function loadDir(project, rel) {
+    const k = tkey(project, rel);
+    children.set(k, 'loading');
+    renderTree();
+    const r = await window.cc.listDir(project, rel);
+    children.set(k, r && r.ok && !r.isFile ? r.entries : (r && r.ok ? [] : { error: (r && r.error) || 'Could not open.' }));
+    renderTree();
+  }
+
+  function toggle(project, rel, forceOpen) {
+    const k = tkey(project, rel);
+    if (expanded.has(k) && !forceOpen) { expanded.delete(k); renderTree(); return; }
+    expanded.add(k);
+    if (!Array.isArray(children.get(k))) loadDir(project, rel); else renderTree();
+  }
+
+  // Open the folders leading to a place, mark it, and expand it if it is a folder.
+  async function reveal(project, path) {
+    sel = { project, path };
+    const segs = path ? path.split('/') : [];
+    let rel = '';
+    expanded.add(tkey(project, ''));
+    if (!Array.isArray(children.get(tkey(project, '')))) await loadDir(project, '');
+    for (let i = 0; i < segs.length - 1; i++) {
+      rel = joinPath(rel, segs[i]);
+      expanded.add(tkey(project, rel));
+      if (!Array.isArray(children.get(tkey(project, rel)))) await loadDir(project, rel);
+    }
+    if (path) {
+      const r = await window.cc.listDir(project, path);
+      if (r && r.ok && !r.isFile) {
+        expanded.add(tkey(project, path));
+        if (!Array.isArray(children.get(tkey(project, path)))) await loadDir(project, path);
+      }
+    }
+    renderTree();
+  }
+
+  function updatePanelMode() {
+    const tree = current === 'projects';
+    $('feedTitle').textContent = tree ? 'Project folders' : 'Recent activity';
+    $('quick').style.display = tree ? 'none' : '';
+    $('feedBody').style.display = tree ? 'none' : '';
+    $('tree').hidden = !tree;
+    if (tree) {
+      children.clear();
+      renderTree();
+      [...expanded].forEach((k) => { const [p, r] = k.split('\u0001'); loadDir(p, r); });
+    }
+  }
+
+  window.cc.onNav((n) => { if (n && n.section === 'projects' && n.project) reveal(n.project, n.path || ''); });
+
+
+  // ---- light / dark ----
+  const dark = window.matchMedia('(prefers-color-scheme: dark)');
+  const SUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></svg>';
+  const MOON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg>';
+  function paintTheme() {
+    const b = $('themeBtn');
+    b.innerHTML = dark.matches ? SUN : MOON;
+    const next = dark.matches ? 'light' : 'dark';
+    b.title = 'Switch to ' + next + ' mode';
+    b.setAttribute('aria-label', 'Switch to ' + next + ' mode');
+  }
+  dark.addEventListener('change', paintTheme);
+  $('themeBtn').addEventListener('click', () => window.cc.setTheme(dark.matches ? 'light' : 'dark'));
+  paintTheme();
+
+  // ---- logo (transformHub.png in the app folder, if present) ----
+  window.cc.getLogo().then((url) => {
+    if (!url) return;
+    const img = document.createElement('img');
+    img.src = url; img.alt = 'transformHub'; img.id = 'logoImg';
+    const btn = el('button', 'logo'); btn.title = 'Home'; btn.setAttribute('aria-label', 'Home');
+    btn.append(img);
+    btn.addEventListener('click', () => window.cc.select('home'));
+    $('rail').prepend(btn);
   });
-  window.cc.getSections().then(async (sections) => {
-    build(sections);
-    const current = await window.cc.getCurrent();
-    if (current) buttons.forEach((b, key) => b.classList.toggle('active', key === current));
+
+  $('feedToggle').addEventListener('click', () => window.cc.toggleFeed());
+  $('search').addEventListener('click', () => window.cc.openPalette());
+  $('reload').addEventListener('click', () => window.cc.reload());
+  $('quick').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $('quickTitle');
+    const title = input.value.trim();
+    if (!title) return;
+    const task = { id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), title, done: false, project: null, due: '', created: Date.now(), doneAt: null };
+    input.value = '';
+    const next = await window.cc.setData({ tasks: [...data.tasks, task] });
+    if (next) { data = next; renderFeed(); }
   });
+
+  window.cc.onSelected((id) => { current = id; markCurrent(); updatePanelMode(); });
+  window.cc.onUi(applyUi);
+  window.cc.onFavicons((f) => { favicons = f || {}; if (sections.length) { buildRail(); markCurrent(); } });
+  window.cc.onTodo((t) => { todo = { enabled: true, ...t }; renderFeed(); });
+  window.cc.onChanged((d) => { data = d; renderFeed(); });
+  window.cc.onFeedsChanged((f) => { feeds = f; renderFeed(); });
+
+  (async () => {
+    favicons = (await window.cc.getFavicons()) || {};
+    todo = (await window.cc.getTodo()) || todo;
+    sections = await window.cc.getSections();
+    buildRail();
+    applyUi(await window.cc.getUi());
+    current = await window.cc.getCurrent();
+    markCurrent();
+    projects = (await window.cc.getProjects()) || [];
+    updatePanelMode();
+    data = (await window.cc.getData()) || data;
+    feeds = (await window.cc.getFeeds()) || feeds;
+    renderFeed();
+    setInterval(renderFeed, 5 * 60 * 1000);
+  })();
 </script>
 </body>
 </html>
