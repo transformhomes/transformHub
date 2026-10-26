@@ -39,6 +39,9 @@ function eventTimeLabel(ev) {
   return fmtTime(ev.start) + (ev.end ? ' – ' + fmtTime(ev.end) : '');
 }
 
+// Your own events plus read-only ones from calendar feeds (for example Outlook).
+const allEvents = () => [...App.data.events, ...App.feeds.events];
+
 function sortEvents(list) {
   return list.slice().sort((a, b) =>
     a.date.localeCompare(b.date) || (b.allDay - a.allDay) || (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
@@ -48,11 +51,17 @@ function sortEvents(list) {
 const App = {
   data: { tasks: [], events: [], focusProject: null },
   projects: [],
+  feeds: { events: [], status: [], configured: 0 },
+  todo: { enabled: false, status: 'idle', tasks: [], updated: null, diag: [] },
   async init(render) {
     this.projects = await window.cc.getProjects();
     this.data = (await window.cc.getData()) || this.data;
+    this.feeds = (await window.cc.getFeeds()) || this.feeds;
+    this.todo = (window.cc.getTodo && (await window.cc.getTodo())) || this.todo;
     render();
     window.cc.onChanged((d) => { this.data = d; render(); });
+    window.cc.onFeedsChanged((f) => { this.feeds = f; render(); });
+    if (window.cc.onTodo) window.cc.onTodo((t) => { this.todo = { enabled: true, ...t }; render(); });
   },
   async save(patch) {
     const next = await window.cc.setData(patch);

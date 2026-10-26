@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Search</title>
+<link rel="stylesheet" href="theme.css">
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--card); color:var(--fg); font-family:"Segoe UI", system-ui, sans-serif; font-size:14px; overflow:hidden; border-radius:12px; }
+  #box { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card); }
+  #q { width:100%; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--fg); font:inherit; font-size:15px; padding:14px 16px; outline:none; }
+  #q:focus-visible { box-shadow:inset 0 -2px 0 var(--accent); }
+  #list { max-height:392px; overflow:auto; padding:6px 6px 8px; margin:0; list-style:none; }
+  .grp { padding:10px 10px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .opt { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:8px; cursor:pointer; }
+  .opt[aria-selected="true"] { background:var(--sel); }
+  .opt .l { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .opt .m { color:var(--muted); font-size:12px; flex:none; }
+  .none { padding:18px 16px; color:var(--muted); }
+  #foot { display:flex; gap:14px; padding:7px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:11.5px; }
+</style>
+</head>
+<body>
+<div id="box" role="dialog" aria-modal="true" aria-label="Search and commands">
+  <input id="q" type="text" role="combobox" aria-expanded="true" aria-controls="list" aria-autocomplete="list" aria-activedescendant="" placeholder="Search sections, projects, tasks, events, commands…" autocomplete="off" spellcheck="false">
+  <ul id="list" role="listbox" aria-label="Results"></ul>
+  <div id="foot"><span>↑↓ move</span><span>Enter open</span><span>Esc close</span></div>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let all = [], shown = [], active = 0, recents = [];
+  const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+
+  async function load() {
+    const [sections, projects, data, feeds, ui] = await Promise.all([
+      window.cc.getSections(), window.cc.getProjects(), window.cc.getData(), window.cc.getFeeds(), window.cc.getUi()]);
+    recents = (ui && ui.recents) || [];
+    const items = [];
+    (sections || []).filter((s) => s.type !== 'disabled').forEach((s) => items.push({ key: 'go:' + s.id, group: 'Go to', label: s.label, run: () => window.cc.select(s.id) }));
+    (projects || []).forEach((p) => items.push({ key: 'proj:' + p.id, group: 'Projects', label: p.name, meta: 'AI Projects', run: () => window.cc.navigate({ section: 'projects', project: p.id }) }));
+    ((data && data.tasks) || []).filter((t) => !t.done).slice(0, 300).forEach((t) => items.push({ key: 'task:' + t.id, group: 'Tasks', label: t.title, meta: t.due || '', run: () => window.cc.select('tasks') }));
+    const today = todayStr();
+    [...((data && data.events) || []), ...((feeds && feeds.events) || [])].filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 300)
+      .forEach((e) => items.push({ key: 'event:' + String(e.id).replace(/[^\w.-]/g, '').slice(0, 60), group: 'Events', label: e.title, meta: e.date, run: () => window.cc.navigate({ section: 'calendar', date: e.date }) }));
+    items.push(
+      { key: 'cmd:panel', group: 'Commands', label: 'Show or hide activity panel', meta: 'Ctrl+\\', run: () => window.cc.toggleFeed() },
+      { key: 'cmd:reload', group: 'Commands', label: 'Reload this section', meta: 'F5', run: () => window.cc.reload() },
+      { key: 'cmd:settings', group: 'Commands', label: 'Edit settings file', run: () => window.cc.openConfig() });
+    all = items;
+  }
+
+  function filter(q) {
+    q = q.trim().toLowerCase();
+    if (!q) {
+      const rec = recents.map((k) => all.find((i) => i.key === k)).filter(Boolean).map((i) => ({ ...i, group: 'Recent' }));
+      return [...rec, ...all.filter((i) => i.group === 'Go to' || i.group === 'Commands')];
+    }
+    return all.map((i) => {
+      const l = i.label.toLowerCase();
+      const score = l.startsWith(q) ? 0 : l.includes(q) ? 1 : (i.meta || '').toLowerCase().includes(q) ? 2 : 9;
+      return { i, score };
+    }).filter((x) => x.score < 9).sort((a, b) => a.score - b.score).map((x) => x.i).slice(0, 40);
+  }
+
+  function render() {
+    const list = $('list');
+    list.replaceChildren();
+    shown = filter($('q').value);
+    if (active >= shown.length) active = 0;
+    if (!shown.length) {
+      const n = document.createElement('li'); n.className = 'none'; n.setAttribute('role', 'presentation'); n.textContent = 'No results'; list.append(n);
+    }
+    let last = null;
+    shown.forEach((it, idx) => {
+      if (it.group !== last) { last = it.group; const g = document.createElement('li'); g.className = 'grp'; g.setAttribute('role', 'presentation'); g.textContent = it.group; list.append(g); }
+      const li = document.createElement('li');
+      li.className = 'opt'; li.id = 'o' + idx; li.setAttribute('role', 'option'); li.setAttribute('aria-selected', idx === active ? 'true' : 'false');
+      const l = document.createElement('span'); l.className = 'l'; l.textContent = it.label; li.append(l);
+      if (it.meta) { const m = document.createElement('span'); m.className = 'm'; m.textContent = it.meta; li.append(m); }
+      li.addEventListener('mousemove', () => { if (active !== idx) { active = idx; mark(); } });
+      li.addEventListener('click', () => choose(idx));
+      list.append(li);
+    });
+    $('q').setAttribute('aria-activedescendant', shown.length ? 'o' + active : '');
+    fit();
+  }
+
+  function mark() {
+    document.querySelectorAll('.opt').forEach((o, i) => o.setAttribute('aria-selected', i === active ? 'true' : 'false'));
+    $('q').setAttribute('aria-activedescendant', shown.length ? 'o' + active : '');
+    const o = $('o' + active); if (o) o.scrollIntoView({ block: 'nearest' });
+  }
+
+  function fit() { window.cc.paletteResize($('box').getBoundingClientRect().height + 2); }
+
+  function choose(idx) {
+    const it = shown[idx];
+    if (!it) return;
+    if (/^[a-z]{2,10}:[\w.-]{1,60}$/i.test(it.key)) window.cc.pushRecent(it.key);
+    window.cc.closePalette();
+    it.run();
+  }
+
+  $('q').addEventListener('input', () => { active = 0; render(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); window.cc.closePalette(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); if (shown.length) { active = (active + 1) % shown.length; mark(); } }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (shown.length) { active = (active - 1 + shown.length) % shown.length; mark(); } }
+    else if (e.key === 'Home') { e.preventDefault(); active = 0; mark(); }
+    else if (e.key === 'End') { e.preventDefault(); active = Math.max(0, shown.length - 1); mark(); }
+    else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+    else if (e.key === 'Tab') { e.preventDefault(); } // focus stays in the search box
+  });
+
+  window.cc.onPaletteOpen(async () => { $('q').value = ''; active = 0; await load(); render(); $('q').focus(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+/* Colour tokens for every built-in page. Dark is the default; light applies when the app (or Windows) is in light mode. */
+:root {
+  color-scheme: dark;
+  --frame:#0f1319; --rail:#131820; --stage:#1a2029; --bg:#1a2029; --panel:#161b23; --card:#212836;
+  --line:#2b3442; --line-strong:#3b4658; --fg:#e8edf3; --muted:#9ba6b3;
+  --accent:#5aa9ff; --accent-hover:#7ab9ff; --accent-bg:#1e3b5e; --on-accent:#06111f; --chip-fg:#d3e5ff;
+  --hover:#262e3b; --sel:#264260; --well:#0f1319;
+  --danger:#ff7b7b; --ok:#4cc38a; --warn:#e5a63c;
+  --feed-bg:#12403c; --feed-fg:#c2f1ea;
+  --err-bg:#3a1d1f; --err-fg:#ffb4b4; --err-line:#5a2a2d;
+  --ok-bg:#13301f; --ok-fg:#9be2bb; --ok-line:#1f4d33;
+  --toast-bg:#262e3b;
+  --ic-home:#5aa9ff; --ic-mail:#4fa3f7; --ic-briefcase:#e0a43a; --ic-tasks:#4cc38a; --ic-calendar:#ff7f6b; --ic-users:#a78bfa;
+  --ic-folder:#f2b84b; --ic-star:#ffb454; --ic-chart:#2dd4bf; --ic-book:#f472b6; --ic-check:#4cc38a; --ic-chat:#38bdf8; --ic-gear:#9ba6b3;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --frame:#e5eaf1; --rail:#dde4ed; --stage:#ffffff; --bg:#ffffff; --panel:#f3f6fa; --card:#f3f6fa;
+    --line:#d6dee8; --line-strong:#b9c4d2; --fg:#18222e; --muted:#566475;
+    --accent:#1a63c4; --accent-hover:#1352a6; --accent-bg:#dbe8fa; --on-accent:#ffffff; --chip-fg:#17407a;
+    --hover:#e5ecf5; --sel:#d3e3f9; --well:#eef2f7;
+    --danger:#c42b2b; --ok:#17784a; --warn:#9a6200;
+    --feed-bg:#d3efea; --feed-fg:#0d4a44;
+    --err-bg:#fde7e7; --err-fg:#8f1d1d; --err-line:#f1b4b4;
+    --ok-bg:#e1f5ea; --ok-fg:#145c39; --ok-line:#a6dbbd;
+    --toast-bg:#ffffff;
+    --ic-home:#1a63c4; --ic-mail:#1d63c9; --ic-briefcase:#9a5a00; --ic-tasks:#17784a; --ic-calendar:#c0392b; --ic-users:#6d43d1;
+    --ic-folder:#8a5f00; --ic-star:#a9560a; --ic-chart:#0f766e; --ic-book:#be185d; --ic-check:#17784a; --ic-chat:#0369a1; --ic-gear:#566475;
+  }
+}
