@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:">
-<title>AI Projects</title>
+<title>Explorer</title>
 <link rel="stylesheet" href="shared.css">
 <style>
   .proj { text-align:left; display:block; width:100%; cursor:pointer; }
@@ -40,6 +40,11 @@
   const activeCount = (pid) => App.data.tasks.filter((t) => !t.done && t.project === pid).length;
   const show = (...nodes) => root.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false));
 
+  let roots = { projects: [], drives: [], favs: [] };
+  const rootById = (id) => roots.projects.find((x) => x.id === id) || roots.drives.find((x) => x.id === id) || null;
+  const isProject = (id) => roots.projects.some((x) => x.id === id);
+  const isFav = (id, path) => roots.favs.some((f) => f.root === id && f.rel === path);
+  const fullPath = (r, rel) => r.path.replace(/[\\/]+$/, '') + (rel ? '\\' + rel.replace(/\//g, '\\') : (/^[A-Za-z]:[\\/]?$/.test(r.path) ? '\\' : ''));
   let loc = { project: null, path: '' };   // where we are
   let view = null;                        // what loaded for that place
   let note = null;                        // { ok, text } message under the buttons
@@ -57,10 +62,14 @@
   const join = (a, b) => (a ? a + '/' + b : b);
   const parentOf = (p) => p.split('/').slice(0, -1).join('/');
 
+  async function refreshRoots() { const r = await window.cc.getRoots(); if (r) roots = r; }
+  window.addEventListener('focus', () => { if (started) refreshRoots().then(render); }); // picks up favourites changed in the side panel
+
   async function load() {
     const my = ++seq;
+    await refreshRoots();
     view = null;
-    if (!loc.project || !App.projects.some((x) => x.id === loc.project)) { render(); return; }
+    if (!loc.project || !rootById(loc.project)) { render(); return; }
     const r = await window.cc.listDir(loc.project, loc.path);
     if (my !== seq) return;
     if (!r || !r.ok) view = { kind: 'error', error: (r && r.error) || 'Could not open this.' };
@@ -84,30 +93,39 @@
     render();
   }
 
+  function folderCard(id, name, path, rel, extra) {
+    return h('button', { class: 'card proj', onclick: () => goTo(id, rel || '') },
+      h('div', { class: 'name', text: name }),
+      h('div', { class: 'path', text: path }),
+      extra && h('div', { class: 'row' }, extra));
+  }
+
   function renderAll() {
-    const children = [h('h1', { text: 'AI Projects' }), h('p', { class: 'sub', text: 'Pick a project, or browse its folders in the panel on the left.' })];
-    if (!App.projects.length) {
-      children.push(h('div', { class: 'empty', text: 'No projects yet. Add them under "projects" in the settings file (cog in the left rail).' }));
-    } else {
+    const children = [h('h1', { text: 'Explorer' }), h('p', { class: 'sub', text: 'Pick a favourite or a drive, or browse in the panel on the left. Click the star next to any folder to keep it in your favourites.' })];
+    children.push(h('h2', { text: 'Favourites' }));
+    const favGrid = h('div', { class: 'grid' });
+    roots.projects.forEach((p) => {
+      const n = activeCount(p.id);
+      favGrid.append(folderCard(p.id, p.name, p.path, '', [
+        App.data.focusProject === p.id && h('span', { class: 'tag accent', text: 'Focus' }),
+        h('span', { class: 'tag', text: n + (n === 1 ? ' open task' : ' open tasks') })]));
+    });
+    roots.favs.forEach((f) => { const r = rootById(f.root); if (r) favGrid.append(folderCard(f.root, f.name, fullPath(r, f.rel), f.rel)); });
+    if (favGrid.children.length) children.push(favGrid);
+    else children.push(h('div', { class: 'empty', text: 'No favourites yet.' }));
+    children.push(h('h2', { style: 'margin-top:28px', text: 'This PC' }));
+    if (roots.drives.length) {
       const grid = h('div', { class: 'grid' });
-      App.projects.forEach((p) => {
-        const n = activeCount(p.id);
-        grid.append(h('button', { class: 'card proj', onclick: () => goTo(p.id, '') },
-          h('div', { class: 'name', text: p.name }),
-          h('div', { class: 'path', text: p.path }),
-          h('div', { class: 'row' },
-            App.data.focusProject === p.id && h('span', { class: 'tag accent', text: 'Focus' }),
-            h('span', { class: 'tag', text: n + (n === 1 ? ' open task' : ' open tasks') }))));
-      });
+      roots.drives.forEach((d) => grid.append(folderCard(d.id, d.name, d.path, '')));
       children.push(grid);
-    }
+    } else children.push(h('div', { class: 'empty', text: 'No drives are set up. Add them under "explorer" in the settings file (cog in the left rail).' }));
     show(children);
   }
 
   function crumbs(p) {
     const segs = loc.path ? loc.path.split('/') : [];
     const bar = h('div', { class: 'crumbs', role: 'navigation', 'aria-label': 'Folder path' },
-      h('button', { class: 'ghost', onclick: () => goTo('', ''), text: 'All projects' }), '›');
+      h('button', { class: 'ghost', onclick: () => goTo('', ''), text: 'Explorer' }), '›');
     if (!segs.length) bar.append(h('span', { class: 'here', text: p.name }));
     else {
       bar.append(h('button', { class: 'ghost', onclick: () => goTo(p.id, ''), text: p.name }));
@@ -154,10 +172,12 @@
   function renderDir(p) {
     const atRoot = !loc.path;
     const isFocus = App.data.focusProject === p.id;
+    const proj = isProject(p.id);
     const actions = h('div', { class: 'row actions' },
-      h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened in Explorer.') }, 'Open in Explorer'),
-      atRoot && h('button', { onclick: () => window.cc.openArcane() }, 'Arcane terminals'),
-      atRoot && h('button', { class: isFocus ? '' : 'ghost', onclick: () => App.save({ focusProject: isFocus ? null : p.id }) }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus'));
+      h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened in File Explorer.') }, 'Open in File Explorer'),
+      !atRoot && favButton(p),
+      atRoot && proj && h('button', { onclick: () => window.cc.openArcane() }, 'Arcane terminals'),
+      atRoot && proj && h('button', { class: isFocus ? '' : 'ghost', onclick: () => App.save({ focusProject: isFocus ? null : p.id }) }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus'));
 
     const list = h('div', { class: 'files', role: 'list' },
       h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
@@ -169,10 +189,10 @@
         h('span', { class: 'm', text: en.dir ? '' : sizeLabel(en.size) })));
     });
 
-    show(crumbs(p), h('h1', { text: loc.path ? loc.path.split('/').pop() : p.name }), h('p', { class: 'sub', text: p.path + (loc.path ? '\\' + loc.path.replace(/\//g, '\\') : '') }),
+    show(crumbs(p), h('h1', { text: loc.path ? loc.path.split('/').pop() : p.name }), h('p', { class: 'sub', text: fullPath(p, loc.path) }),
       actions, noteBox(), list,
       view.truncated && h('div', { class: 'muted', style: 'margin-top:8px', text: 'Showing the first 1000 items.' }),
-      atRoot && tasksBlock(p));
+      atRoot && proj && tasksBlock(p));
   }
 
   function renderFile(p) {
@@ -186,24 +206,33 @@
     show(crumbs(p), h('h1', { style: 'word-break:break-word', text: name }), h('p', { class: 'sub', text: sizeLabel(view.info.size) + ' · modified ' + dateLabel(view.info.mtime) }),
       h('div', { class: 'row actions' },
         h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened.') }, 'Open'),
-        h('button', { onclick: () => act(() => window.cc.revealFile(p.id, loc.path), 'Shown in Explorer.') }, 'Show in Explorer'),
+        h('button', { onclick: () => act(() => window.cc.revealFile(p.id, loc.path), 'Shown in File Explorer.') }, 'Show in File Explorer'),
         h('button', { class: 'ghost', onclick: () => goTo(p.id, parentOf(loc.path)) }, '‹ Back to folder')),
       noteBox(), body);
   }
 
+  function favButton(p) {
+    const on = isFav(p.id, loc.path);
+    return h('button', { class: on ? '' : 'ghost', onclick: async () => {
+      const r = await window.cc.toggleFav(p.id, loc.path, loc.path.split('/').pop());
+      if (r && r.ok) roots.favs = r.favs; else note = { ok: false, text: (r && r.error) || 'Could not change favourites.' };
+      render();
+    } }, on ? '★ Favourite (click to remove)' : '☆ Add to favourites');
+  }
+
   function render() {
-    const p = App.projects.find((x) => x.id === loc.project);
+    const p = rootById(loc.project);
     if (!loc.project || !p) return renderAll();
     if (!view) return show(h('div', { class: 'empty', text: 'Loading…' }));
     if (view.kind === 'error') {
-      return show(crumbs(p), h('div', { class: 'msg err', text: view.error }), h('button', { onclick: () => goTo(p.id, '') }, 'Back to project'));
+      return show(crumbs(p), h('div', { class: 'msg err', text: view.error }), h('button', { onclick: () => goTo(p.id, '') }, 'Back to ' + p.name));
     }
     if (view.kind === 'file') return renderFile(p);
     renderDir(p);
   }
 
   window.cc.onNavigate((p) => applyLoc(p));
-  App.init(() => { if (!started) { started = true; load(); } else render(); });
+  window.cc.getRoots().then((r) => { roots = r || roots; App.init(() => { if (!started) { started = true; load(); } else render(); }); });
 </script>
 </body>
 </html>

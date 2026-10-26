@@ -57,6 +57,10 @@
   .tn.root .tname { font-weight:600; }
   .tn.sel .tname { color:var(--fg); }
   .tmsg { color:var(--muted); font-size:12px; padding:4px 8px; }
+  .tgrp { margin:12px 8px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .tn .star { width:24px; flex:none; text-align:center; color:var(--muted); opacity:0; padding:5px 0; }
+  .tn:hover .star, .tn .star:focus-visible, .tn .star.on { opacity:1; }
+  .tn .star.on { color:var(--warn); }
 
   #header { position:fixed; top:0; right:0; height:var(--header-h); left:calc(var(--rail-w) + var(--feed-w)); display:flex; align-items:center; gap:8px; padding:0 var(--gap) 0 12px; }
   body.feed-closed #header { left:var(--rail-w); }
@@ -83,7 +87,7 @@
     <button type="submit">Add</button>
   </form>
   <div id="feedBody"></div>
-  <div id="tree" hidden role="group" aria-label="Project folders"></div>
+  <div id="tree" hidden role="group" aria-label="Folders"></div>
 </aside>
 
 <header id="header">
@@ -216,10 +220,10 @@
     done.forEach((t) => item(proj(t.project) ? proj(t.project).name.slice(0, 8) : 'Done', t.title, () => window.cc.select('tasks'), true));
   }
 
-  function applyUi(ui) { document.body.classList.toggle('feed-closed', !(ui && ui.feedOpen)); }
+  function applyUi(ui) { document.body.classList.toggle('feed-closed', !(ui && ui.feedOpen)); if (typeof refreshRoots === 'function') refreshRoots(); }
 
 
-  // ---- project folders (shown in the side panel while AI Projects is open) ----
+  // ---- folders (shown in the side panel while the Explorer is open) ----
   const expanded = new Set();
   const children = new Map();   // key -> entries | 'loading' | { error }
   let sel = { project: null, path: '' };
@@ -246,6 +250,14 @@
       window.cc.navigate({ section: 'projects', project, path: rel });
     });
     row.append(chev, name);
+    if (isDir && rel !== '') {
+      const pinned = isFav(project, rel);
+      const star = el('button', 'star' + (pinned ? ' on' : ''), pinned ? '★' : '☆');
+      star.title = pinned ? 'Remove from favourites' : 'Add to favourites';
+      star.setAttribute('aria-label', (pinned ? 'Remove from favourites: ' : 'Add to favourites: ') + label);
+      star.addEventListener('click', () => window.cc.toggleFav(project, rel, label));
+      row.append(star);
+    }
     parent.append(row);
     if (isDir && open) {
       const kids = children.get(k);
@@ -256,11 +268,24 @@
     }
   }
 
+  let roots = { projects: [], drives: [], favs: [] };
+  const isFav = (project, rel) => roots.favs.some((f) => f.root === project && f.rel === rel);
+
   function renderTree() {
     const t = $('tree');
     t.replaceChildren();
-    if (!projects.length) { t.append(el('div', 'tmsg', 'No projects yet. Add them in the settings file.')); return; }
-    projects.forEach((p) => addNode(t, p.id, '', p.name, true, 0));
+    t.append(el('div', 'tgrp', 'Favourites'));
+    if (!roots.projects.length && !roots.favs.length) t.append(el('div', 'tmsg', 'Click the star next to a folder to keep it here.'));
+    roots.projects.forEach((p) => addNode(t, p.id, '', p.name, true, 0));
+    roots.favs.forEach((f) => addNode(t, f.root, f.rel, f.name, true, 0));
+    t.append(el('div', 'tgrp', 'This PC'));
+    if (!roots.drives.length) t.append(el('div', 'tmsg', 'No drives are set up. Add them under "explorer" in the settings file.'));
+    roots.drives.forEach((d) => addNode(t, d.id, '', d.name, true, 0));
+  }
+
+  async function refreshRoots() {
+    roots = (await window.cc.getRoots()) || roots;
+    if (current === 'projects') renderTree();
   }
 
   async function loadDir(project, rel) {
@@ -303,7 +328,7 @@
 
   function updatePanelMode() {
     const tree = current === 'projects';
-    $('feedTitle').textContent = tree ? 'Project folders' : 'Recent activity';
+    $('feedTitle').textContent = tree ? 'Explorer' : 'Recent activity';
     $('quick').style.display = tree ? 'none' : '';
     $('feedBody').style.display = tree ? 'none' : '';
     $('tree').hidden = !tree;
@@ -373,6 +398,7 @@
     current = await window.cc.getCurrent();
     markCurrent();
     projects = (await window.cc.getProjects()) || [];
+    await refreshRoots();
     updatePanelMode();
     data = (await window.cc.getData()) || data;
     feeds = (await window.cc.getFeeds()) || feeds;
