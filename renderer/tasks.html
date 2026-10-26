@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Tasks</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="page">
+  <h1>Tasks</h1>
+  <p class="sub">Saved on this laptop. Tick to complete, × to delete (with undo).</p>
+
+  <form id="add" class="row" autocomplete="off">
+    <input id="title" class="grow" type="text" maxlength="500" placeholder="Add a task and press Enter" aria-label="New task">
+    <span id="projSlot"></span>
+    <input id="due" type="date" aria-label="Due date">
+    <button class="primary" type="submit">Add</button>
+  </form>
+
+  <div class="row" style="margin-top:16px">
+    <button class="ghost" data-f="active">Active</button>
+    <button class="ghost" data-f="done">Done</button>
+    <button class="ghost" data-f="all">All</button>
+    <span class="grow"></span>
+    <span id="filterSlot"></span>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<script src="common.js"></script>
+<script>
+  let filter = 'active';
+  let projectFilter = '';
+  let formProj;
+  let filterSel;
+
+  function setup() {
+    formProj = projectSelect('', false);
+    document.getElementById('projSlot').append(formProj);
+    filterSel = projectSelect('', true);
+    filterSel.addEventListener('change', () => { projectFilter = filterSel.value; render(); });
+    document.getElementById('filterSlot').append(filterSel);
+
+    document.getElementById('add').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const title = document.getElementById('title');
+      const due = document.getElementById('due');
+      if (!title.value.trim()) { title.focus(); return; }
+      await addTask(title.value, formProj.value, due.value);
+      title.value = '';
+      due.value = ''; // don't let the next task silently inherit this date
+      title.focus();
+    });
+    document.querySelectorAll('[data-f]').forEach((b) =>
+      b.addEventListener('click', () => { filter = b.dataset.f; render(); }));
+  }
+
+  function group(title, tasks, out) {
+    if (!tasks.length) return;
+    out.append(h('div', { class: 'group-title', text: title + ' (' + tasks.length + ')' }));
+    sortTasks(tasks).forEach((t) => out.append(taskRow(t)));
+  }
+
+  function render() {
+    document.querySelectorAll('[data-f]').forEach((b) => {
+      b.style.color = b.dataset.f === filter ? 'var(--accent)' : '';
+    });
+    const list = document.getElementById('list');
+    list.replaceChildren();
+
+    let tasks = App.data.tasks.filter((t) => !projectFilter || t.project === projectFilter);
+    const today = todayStr();
+    const active = tasks.filter((t) => !t.done);
+    const done = tasks.filter((t) => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+
+    if (filter !== 'done') {
+      group('Overdue', active.filter((t) => t.due && t.due < today), list);
+      group('Today', active.filter((t) => t.due === today), list);
+      group('Upcoming', active.filter((t) => t.due && t.due > today), list);
+      group('No date', active.filter((t) => !t.due), list);
+    }
+    if (filter !== 'active') {
+      if (done.length) {
+        list.append(h('div', { class: 'group-title', text: 'Done (' + done.length + ')' }));
+        done.forEach((t) => list.append(taskRow(t)));
+      }
+    }
+    if (!list.children.length) {
+      list.append(h('div', { class: 'empty', text: filter === 'done' ? 'Nothing completed yet.' : 'No tasks here. Add one above.' }));
+    }
+  }
+
+  App.init(() => { if (!formProj) setup(); render(); });
+</script>
+</body>
+</html>

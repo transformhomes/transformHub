@@ -1,0 +1,32 @@
+{
+  "name": "th-command-centre",
+  "version": "0.2.0",
+  "description": "Transform Homes Command Centre - one window for Outlook, calendar, OneDrive, To Do and Claude",
+  "main": "main.js",
+  "author": "Transform Homes",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "au.com.transformhomes.commandcentre",
+    "productName": "TH Command Centre",
+    "files": [
+      "main.js",
+      "preload.js",
+      "preload-local.js",
+      "store.js",
+      "config.default.json",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

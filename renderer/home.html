@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Home</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin-top:18px; }
+  .card h2 { display:flex; justify-content:space-between; align-items:baseline; }
+  .count { font-size:12px; color:var(--muted); font-weight:400; }
+  .ev { display:flex; gap:10px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .ev .when { color:var(--muted); font-size:12.5px; min-width:84px; }
+  .links { margin-top:20px; }
+  .focus { cursor:pointer; text-align:left; width:100%; }
+  .focus:hover { border-color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 id="greeting">Welcome</h1>
+  <p class="sub" id="date"></p>
+  <div id="focusSlot"></div>
+  <div class="cols" id="cols"></div>
+  <div class="row links" id="links"></div>
+  <p class="muted" style="margin-top:22px;font-size:12.5px">Tasks and events here are the ones saved in this app. Outlook, Teams and OneDrive items stay in their own tabs for now.</p>
+</div>
+
+<script src="common.js"></script>
+<script>
+  const el = (id) => document.getElementById(id);
+
+  function card(title, count, body) {
+    return h('div', { class: 'card' },
+      h('h2', {}, h('span', { text: title }), count != null && h('span', { class: 'count', text: String(count) })),
+      body);
+  }
+
+  function evLine(ev, withDate) {
+    return h('div', { class: 'ev' },
+      h('span', { class: 'when', text: (withDate ? fmtDate(ev.date) + ' · ' : '') + eventTimeLabel(ev) }),
+      h('span', { text: ev.title }));
+  }
+
+  function render() {
+    const now = new Date();
+    const hr = now.getHours();
+    el('greeting').textContent = (hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening') + (settings.userName ? ', ' + settings.userName : '');
+    el('date').textContent = now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+    const today = todayStr();
+    const tasks = App.data.tasks.filter((t) => !t.done);
+    const overdue = sortTasks(tasks.filter((t) => t.due && t.due < today));
+    const dueToday = tasks.filter((t) => t.due === today);
+    const todayEvents = sortEvents(App.data.events.filter((e) => e.date === today));
+    const soon = sortEvents(App.data.events.filter((e) => e.date > today && e.date <= addDays(today, 7)));
+
+    const focusSlot = el('focusSlot');
+    focusSlot.replaceChildren();
+    const fp = App.projects.find((p) => p.id === App.data.focusProject);
+    if (fp) {
+      const n = tasks.filter((t) => t.project === fp.id).length;
+      focusSlot.append(h('button', { class: 'card focus', onclick: () => window.cc.go('projects') },
+        h('div', { class: 'muted', style: 'font-size:12px;text-transform:uppercase;letter-spacing:.06em', text: 'Focus project' }),
+        h('div', { style: 'font-size:18px;font-weight:600;margin:4px 0', text: fp.name }),
+        h('div', { class: 'muted', text: n + (n === 1 ? ' open task' : ' open tasks') + ' · open AI Projects to continue' })));
+    }
+
+    const needs = [];
+    if (overdue.length) { needs.push(h('div', { class: 'group-title', style: 'margin-top:0;color:var(--danger)', text: 'Overdue' })); overdue.slice(0, 6).forEach((t) => needs.push(taskRow(t))); }
+    if (dueToday.length) { needs.push(h('div', { class: 'group-title', style: overdue.length ? '' : 'margin-top:0', text: 'Due today' })); dueToday.forEach((t) => needs.push(taskRow(t))); }
+    if (!needs.length) needs.push(h('div', { class: 'empty', text: 'Nothing overdue or due today.' }));
+
+    el('cols').replaceChildren(
+      card('Needs attention', overdue.length + dueToday.length, h('div', {}, needs)),
+      card('Today', todayEvents.length, todayEvents.length ? h('div', {}, todayEvents.map((e) => evLine(e, false))) : h('div', { class: 'empty', text: 'No events today.' })),
+      card('Coming up (7 days)', soon.length, soon.length ? h('div', {}, soon.map((e) => evLine(e, true))) : h('div', { class: 'empty', text: 'Nothing in the next 7 days.' })));
+
+    const links = el('links');
+    links.replaceChildren(
+      ...[['mail', 'Inbox'], ['tasks', 'Tasks'], ['calendar', 'Calendar'], ['teams', 'Teams'], ['claude', 'Claude']]
+        .map(([id, label]) => h('button', { onclick: () => window.cc.go(id), text: label })));
+  }
+
+  let settings = { userName: '' };
+  window.cc.getSettings().then((s) => { settings = s || settings; App.init(render); });
+</script>
+</body>
+</html>

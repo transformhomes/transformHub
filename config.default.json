@@ -1,0 +1,73 @@
+{
+  "configVersion": 2,
+  "startSection": "home",
+  "dataDir": null,
+  "agentCommand": "agy",
+  "arcaneUrl": "http://127.0.0.1:7600",
+  "projects": [
+    {
+      "id": "example",
+      "name": "Example project",
+      "path": "C:\\Projects\\Example"
+    }
+  ],
+  "sections": [
+    {
+      "id": "home",
+      "label": "Home",
+      "icon": "home",
+      "type": "local",
+      "file": "renderer/home.html"
+    },
+    {
+      "id": "mail",
+      "label": "Inbox (Outlook)",
+      "icon": "mail",
+      "type": "web",
+      "url": "https://outlook.office.com/mail/"
+    },
+    {
+      "id": "projects",
+      "label": "AI Projects",
+      "icon": "briefcase",
+      "type": "local",
+      "file": "renderer/projects.html"
+    },
+    {
+      "id": "tasks",
+      "label": "Tasks",
+      "icon": "tasks",
+      "type": "local",
+      "file": "renderer/tasks.html"
+    },
+    {
+      "id": "calendar",
+      "label": "Calendar",
+      "icon": "calendar",
+      "type": "local",
+      "file": "renderer/calendar.html"
+    },
+    {
+      "id": "teams",
+      "label": "Teams",
+      "icon": "users",
+      "type": "web",
+      "url": "https://teams.microsoft.com/"
+    },
+    {
+      "id": "files",
+      "label": "Files (OneDrive)",
+      "icon": "folder",
+      "type": "web",
+      "url": "https://www.office.com/launch/onedrive"
+    },
+    {
+      "id": "claude",
+      "label": "Claude",
+      "icon": "star",
+      "type": "web",
+      "url": "https://claude.ai/new"
+    }
+  ],
+  "userName": ""
+}

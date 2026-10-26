@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Calendar</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .layout { display:flex; height:100vh; }
+  .main { flex:1; min-width:0; padding:22px 26px; display:flex; flex-direction:column; }
+  .side { width:340px; flex:none; border-left:1px solid var(--line); background:var(--panel); padding:18px 18px 40px; overflow:auto; }
+  .bar { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .bar h1 { margin:0; flex:1; font-size:22px; }
+  .dow, .cells { display:grid; grid-template-columns:repeat(7, 1fr); }
+  .dow div { padding:6px 8px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .cells { flex:1; grid-template-rows:repeat(6, minmax(0, 1fr)); border-top:1px solid var(--line); border-left:1px solid var(--line); min-height:420px; }
+  .cell { border-right:1px solid var(--line); border-bottom:1px solid var(--line); padding:5px 6px; overflow:hidden; cursor:pointer; background:var(--bg); }
+  .cell:hover { background:#13161c; }
+  .cell.other { background:#0c0e12; color:var(--muted); }
+  .cell.selected { outline:2px solid var(--accent); outline-offset:-2px; }
+  .num { display:inline-grid; place-items:center; min-width:24px; height:24px; border-radius:12px; font-size:12.5px; }
+  .cell.today .num { background:var(--accent); color:#06111f; font-weight:700; }
+  .chip { display:block; margin-top:3px; padding:1px 6px; border-radius:5px; font-size:11.5px; background:var(--accent-bg); color:#cfe3ff;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .more { font-size:11px; color:var(--muted); margin-top:2px; }
+  .side h2 { margin-top:22px; }
+  .side h2:first-child { margin-top:0; }
+  .ev { display:flex; align-items:flex-start; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
+  .ev .t { flex:1; }
+  .ev .when { font-size:12px; color:var(--muted); }
+  .form { display:grid; gap:8px; }
+  .form .row input[type=time] { flex:1; min-width:0; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="main">
+    <div class="bar">
+      <h1 id="monthTitle"></h1>
+      <button id="prev" aria-label="Previous month">‹</button>
+      <button id="todayBtn">Today</button>
+      <button id="next" aria-label="Next month">›</button>
+    </div>
+    <div class="dow" id="dow"></div>
+    <div class="cells" id="cells"></div>
+  </div>
+
+  <aside class="side">
+    <h2>Add event</h2>
+    <form class="form" id="form" autocomplete="off">
+      <input type="text" id="evTitle" maxlength="300" placeholder="Event title" aria-label="Event title">
+      <input type="date" id="evDate" aria-label="Date">
+      <label class="row"><input type="checkbox" id="evAllDay"> All day</label>
+      <div class="row"><input type="time" id="evStart" aria-label="Start time"><input type="time" id="evEnd" aria-label="End time"></div>
+      <button class="primary" type="submit">Add event</button>
+      <div id="formMsg"></div>
+    </form>
+
+    <h2 id="selHead" style="display:none"></h2>
+    <div id="selList"></div>
+
+    <h2>Today</h2>
+    <div id="todayList"></div>
+
+    <h2>Coming up (next 14 days)</h2>
+    <div id="upcoming"></div>
+  </aside>
+</div>
+
+<script src="common.js"></script>
+<script>
+  const now = new Date();
+  let viewYear = now.getFullYear();
+  let viewMonth = now.getMonth();
+  let selected = todayStr();
+  let ready = false;
+
+  const el = (id) => document.getElementById(id);
+
+  function eventsOn(date) { return sortEvents(App.data.events.filter((e) => e.date === date)); }
+
+  function evRow(ev, showDate) {
+    return h('div', { class: 'ev' },
+      h('div', { class: 't' },
+        h('div', { text: ev.title }),
+        h('div', { class: 'when', text: (showDate ? fmtDate(ev.date) + ' · ' : '') + eventTimeLabel(ev) })),
+      h('button', { class: 'icon', title: 'Delete event', 'aria-label': 'Delete event ' + ev.title, onclick: () => deleteEvent(ev.id) }, '×'));
+  }
+
+  function deleteEvent(id) {
+    const removed = App.data.events.find((e) => e.id === id);
+    if (!removed) return;
+    App.save({ events: App.data.events.filter((e) => e.id !== id) })
+      .then(() => toast('Event deleted', 'Undo', () => App.save({ events: [...App.data.events, removed] })));
+  }
+
+  function renderGrid() {
+    el('monthTitle').textContent = new Date(viewYear, viewMonth, 1).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    const first = new Date(viewYear, viewMonth, 1);
+    const offset = (first.getDay() + 6) % 7; // week starts Monday
+    const start = new Date(viewYear, viewMonth, 1 - offset);
+    const byDate = new Map();
+    App.data.events.forEach((e) => { (byDate.get(e.date) || byDate.set(e.date, []).get(e.date)).push(e); });
+    const today = todayStr();
+    const cells = el('cells');
+    cells.replaceChildren();
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const ds = ymd(d);
+      const evs = sortEvents(byDate.get(ds) || []);
+      const cell = h('div', {
+        class: 'cell' + (d.getMonth() !== viewMonth ? ' other' : '') + (ds === today ? ' today' : '') + (ds === selected ? ' selected' : ''),
+        role: 'button', tabindex: '0', 'aria-label': fmtDate(ds, { weekday: 'long', day: 'numeric', month: 'long' }) + (evs.length ? ', ' + evs.length + ' events' : ''),
+        onclick: () => selectDate(ds),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectDate(ds); } },
+      }, h('span', { class: 'num', text: String(d.getDate()) }));
+      evs.slice(0, 3).forEach((ev) => cell.append(h('span', { class: 'chip', text: (ev.allDay ? '' : fmtTime(ev.start) + ' ') + ev.title })));
+      if (evs.length > 3) cell.append(h('div', { class: 'more', text: '+' + (evs.length - 3) + ' more' }));
+      cells.append(cell);
+    }
+  }
+
+  function renderSide() {
+    const today = todayStr();
+    const todayEvs = eventsOn(today);
+    el('todayList').replaceChildren(...(todayEvs.length ? todayEvs.map((e) => evRow(e, false)) : [h('div', { class: 'empty', text: 'Nothing today.' })]));
+
+    const upcoming = sortEvents(App.data.events.filter((e) => e.date > today && e.date <= addDays(today, 14)));
+    el('upcoming').replaceChildren(...(upcoming.length ? upcoming.map((e) => evRow(e, true)) : [h('div', { class: 'empty', text: 'Nothing in the next 14 days.' })]));
+
+    const head = el('selHead');
+    if (selected !== today) {
+      head.style.display = '';
+      head.textContent = fmtDate(selected, { weekday: 'long', day: 'numeric', month: 'long' });
+      const evs = eventsOn(selected);
+      el('selList').replaceChildren(...(evs.length ? evs.map((e) => evRow(e, false)) : [h('div', { class: 'empty', text: 'No events this day.' })]));
+    } else {
+      head.style.display = 'none';
+      el('selList').replaceChildren();
+    }
+  }
+
+  function selectDate(ds) {
+    selected = ds;
+    el('evDate').value = ds;
+    const d = parseYmd(ds);
+    if (d.getMonth() !== viewMonth || d.getFullYear() !== viewYear) { viewYear = d.getFullYear(); viewMonth = d.getMonth(); }
+    render();
+  }
+
+  function render() { renderGrid(); renderSide(); }
+
+  function setup() {
+    el('dow').append(...['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('div', { text: d })));
+    el('evDate').value = selected;
+    el('prev').addEventListener('click', () => { viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; } render(); });
+    el('next').addEventListener('click', () => { viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++; } render(); });
+    el('todayBtn').addEventListener('click', () => { const n = new Date(); viewYear = n.getFullYear(); viewMonth = n.getMonth(); selectDate(todayStr()); });
+
+    const syncAllDay = () => { const on = el('evAllDay').checked; el('evStart').disabled = on; el('evEnd').disabled = on; };
+    el('evAllDay').addEventListener('change', syncAllDay);
+
+    el('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const title = el('evTitle').value.trim();
+      const date = el('evDate').value;
+      const allDay = el('evAllDay').checked;
+      const start = allDay ? '' : el('evStart').value;
+      const end = allDay ? '' : el('evEnd').value;
+      const msg = el('formMsg');
+      msg.replaceChildren();
+      const fail = (text) => msg.append(h('div', { class: 'msg err', text }));
+      if (!title) return fail('Add a title.');
+      if (!date) return fail('Pick a date.');
+      if (end && !start) return fail('Add a start time, or clear the end time.');
+      if (end && start && end <= start) return fail('End time must be after the start time.');
+      await App.save({ events: [...App.data.events, { id: uid(), title, date, allDay: allDay || !start, start, end }] });
+      el('evTitle').value = '';
+      selectDate(date);
+      el('evTitle').focus();
+    });
+  }
+
+  App.init(() => { if (!ready) { ready = true; setup(); } render(); });
+</script>
+</body>
+</html>
