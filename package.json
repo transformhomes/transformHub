@@ -1,6 +1,6 @@
 {
   "name": "th-command-centre",
-  "version": "0.2.0",
+  "version": "0.7.3",
   "description": "Transform Homes Command Centre - one window for Outlook, calendar, OneDrive, To Do and Claude",
   "main": "main.js",
   "author": "Transform Homes",
@@ -22,11 +22,18 @@
       "preload.js",
       "preload-local.js",
       "store.js",
+      "feeds.js",
+      "uistate.js",
+      "todo.js",
       "config.default.json",
-      "renderer/**/*"
+      "renderer/**/*",
+      "transformHub.png"
     ],
     "win": {
       "target": "nsis"
     }
+  },
+  "dependencies": {
+    "ical.js": "^1.5.0"
   }
 }

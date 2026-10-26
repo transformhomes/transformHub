@@ -6,3 +6,4 @@ data/
 # personal settings (project names and folder paths) stay local
 config.dale.json
 config.json
+*.zip

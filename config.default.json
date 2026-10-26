@@ -2,7 +2,6 @@
   "configVersion": 2,
   "startSection": "home",
   "dataDir": null,
-  "agentCommand": "agy",
   "arcaneUrl": "http://127.0.0.1:7600",
   "projects": [
     {
@@ -69,5 +68,6 @@
       "url": "https://claude.ai/new"
     }
   ],
-  "userName": ""
+  "userName": "",
+  "calendarFeeds": []
 }
