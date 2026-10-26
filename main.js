@@ -12,6 +12,8 @@ if (!process.argv.some((a) => a.startsWith('--user-data-dir'))) {
   app.setPath('userData', path.join(app.getPath('appData'), 'th-command-centre'));
 }
 
+if (process.platform === 'win32') app.setAppUserModelId('au.com.transformhomes.transformhub'); // groups the taskbar button under the app's own icon
+
 // Layout in CSS pixels. renderer/index.html uses the same numbers; the tests compare the two.
 const RAIL_W = 64;     // icon rail
 const FEED_W = 300;    // activity panel (when open)
@@ -111,10 +113,11 @@ function findProject(id) {
 }
 
 // Drives shown under "This PC" in the Explorer. Settings: "explorer": { "drives": ["C:\\", "D:\\"] }.
-// An entry can also be { "name": "Shared", "path": "..." }. Default on Windows: C:\ only.
+// An entry can also be { "name": "Shared", "path": "..." }. Default on Windows: C:\ and D:\ (whichever exist).
 function driveRoots() {
   const cfg = loadedConfig && loadedConfig.explorer;
-  const list = cfg && Array.isArray(cfg.drives) ? cfg.drives : (process.platform === 'win32' ? ['C:\\'] : []);
+  const found = (l) => l.filter((d) => { try { return fs.existsSync(d); } catch { return false; } });
+  const list = cfg && Array.isArray(cfg.drives) ? cfg.drives : (process.platform === 'win32' ? found(['C:\\', 'D:\\']) : []);
   const out = [];
   const seen = new Set();
   for (const d of list.slice(0, 12)) {
@@ -144,6 +147,39 @@ function findRoot(id) {
 const BLOCK_NAMES = new Set(['appdata', 'windows', 'program files', 'program files (x86)', 'programdata', '$recycle.bin', 'recovery', 'system volume information',
   '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', 'config.msi', 'pagefile.sys', 'hiberfil.sys', 'swapfile.sys']);
 const isBlockedName = (n) => { const l = String(n).toLowerCase(); return BLOCK_NAMES.has(l) || l.startsWith('ntuser.'); };
+
+// ---- Apps (launchers) ----------------------------------------------------------------------------
+// Settings: "apps": [ { "name": "Typora", "path": "D:\\Program Files\\Typora\\Typora.exe", "types": [".md"] } ].
+// Only apps listed in the settings file can be started, and the pages only ever send an app's id, never a path.
+function appList() {
+  const raw = loadedConfig && Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
+  const out = [];
+  const seen = new Set();
+  for (const a of raw.slice(0, 12)) {
+    if (!a || typeof a.name !== 'string' || !a.name.trim() || typeof a.path !== 'string' || !path.isAbsolute(a.path)) continue;
+    const name = a.name.trim().slice(0, 40);
+    let id = 'app:' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const types = (Array.isArray(a.types) ? a.types : []).filter((t) => typeof t === 'string' && /^\.[a-z0-9]{1,8}$/i.test(t)).map((t) => t.toLowerCase()).slice(0, 20);
+    out.push({ id, name, path: a.path, types });
+  }
+  return out;
+}
+
+function startApp(id, fileArg) {
+  const a = appList().find((x) => x.id === id);
+  if (!a) return { ok: false, error: 'Unknown app.' };
+  let st;
+  try { st = fs.statSync(a.path); } catch { return { ok: false, error: a.name + ' was not found at ' + a.path }; }
+  if (!st.isFile() || (process.platform === 'win32' && !/\.exe$/i.test(a.path))) return { ok: false, error: 'The path for ' + a.name + ' must be its .exe file.' };
+  try {
+    const child = require('child_process').spawn(a.path, fileArg ? [fileArg] : [], { detached: true, stdio: 'ignore' });
+    child.on('error', () => { /* reported nowhere: the app simply did not start */ });
+    child.unref();
+    return { ok: true };
+  } catch { return { ok: false, error: 'Could not start ' + a.name + '.' }; }
+}
 
 
 // ---- Project file browser (read-only) ----------------------------------------------------------
@@ -246,17 +282,18 @@ function broadcastTodo(state) {
 
 function ensureTodoView() {
   if (todoView && !todoView.webContents.isDestroyed()) return todoView;
-  todoView = new WebContentsView({
-    webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+  // A hidden window drawn off-screen (no real window). Microsoft's task list only fills in when the page
+  // believes it is visible, so it must not be parked outside the screen or hidden the normal way.
+  todoView = new BrowserWindow({
+    show: false, width: 1200, height: 900, skipTaskbar: true,
+    webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, offscreen: true },
   });
   const wc = todoView.webContents;
   wc.setUserAgent(chromeUserAgent());
   wc.setAudioMuted(true);
+  wc.setFrameRate(4);
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (event, url) => { if (!isInternal(url)) event.preventDefault(); });
-  // The page must be "on screen" to draw, so park it far outside the visible window.
-  win.contentView.addChildView(todoView);
-  todoView.setBounds({ x: -4000, y: 0, width: 1200, height: 800 });
   return todoView;
 }
 
@@ -465,7 +502,10 @@ function applyTheme() {
   if (win && !win.isDestroyed()) win.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f1319' : '#e5eaf1');
 }
 
-function logoPath() { return path.join(__dirname, 'transformHub.png'); }
+// Rail logo: thumbnail.png if present, otherwise transformHub.png. Window and taskbar icon: thumbnail.ico first.
+function firstExisting(names) { for (const n of names) { const p = path.join(__dirname, n); if (fs.existsSync(p)) return p; } return null; }
+function logoPath() { return firstExisting(['thumbnail.png', 'transformHub.png']) || path.join(__dirname, 'transformHub.png'); }
+function windowIconPath() { return firstExisting(['thumbnail.ico', 'transformHub.ico', 'thumbnail.png', 'transformHub.png']); }
 
 function readLogo() {
   try {
@@ -566,7 +606,7 @@ function createWindow() {
     minHeight: 600,
     title: 'transformHub ' + app.getVersion(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1319' : '#e5eaf1',
-    icon: fs.existsSync(logoPath()) ? logoPath() : undefined,
+    icon: windowIconPath() || undefined,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -604,7 +644,7 @@ function createWindow() {
     }
   });
 
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => { win = null; if (todoView && !todoView.isDestroyed()) todoView.destroy(); });
 }
 
 // Single instance: opening the app again focuses the existing window.
@@ -634,7 +674,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!isLocalSender(e)) return null;
       const projects = (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
       const favs = ui.get().favs.filter((f) => findRoot(f.root));
-      return { projects, drives: driveRoots(), favs };
+      return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, types: x.types })) };
     });
     ipcMain.handle('explorer:fav', (e, root, rel, name) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
@@ -651,6 +691,19 @@ if (!app.requestSingleInstanceLock()) {
       ui.set({ favs: next });
       if (win && !win.isDestroyed()) win.webContents.send('ui:changed', ui.get());
       return { ok: true, pinned: !has, favs: ui.get().favs };
+    });
+    ipcMain.handle('app:launch', (e, id) => (isLocalSender(e) && typeof id === 'string' ? startApp(id, null) : { ok: false, error: 'Not allowed.' }));
+    ipcMain.handle('app:open-with', (e, id, root, rel) => {
+      if (!isLocalSender(e) || typeof id !== 'string') return { ok: false, error: 'Not allowed.' };
+      const a = appList().find((x) => x.id === id);
+      if (!a) return { ok: false, error: 'Unknown app.' };
+      const r = resolveInProject(root, rel);
+      if (r.error) return { ok: false, error: r.error };
+      let isFile = false;
+      try { isFile = fs.statSync(r.real).isFile(); } catch { /* handled below */ }
+      const ext = path.extname(r.real).toLowerCase();
+      if (!isFile || !a.types.includes(ext) || RISKY_EXT.has(ext)) return { ok: false, error: a.name + ' is not set up to open this type of file.' };
+      return startApp(id, r.real);
     });
     ipcMain.handle('fs:list', (e, id, rel) => (isLocalSender(e) ? listDir(id, rel) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('fs:read', (e, id, rel) => (isLocalSender(e) ? readPreview(id, rel) : { ok: false, error: 'Not allowed.' }));

@@ -16,8 +16,8 @@ const EXTRACT_SOURCE = `(() => {
   const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
   if (/login\\.microsoftonline|login\\.live|login\\.microsoft/i.test(location.hostname) ||
       document.querySelector('input[type=password],input[name=loginfmt]')) return { state: 'signin', tasks: [], diag: { host: location.hostname } };
-  const CB = '[role=checkbox],input[type=checkbox],[aria-label*="mark as" i],[aria-label*="complete" i]';
-  const cands = [...document.querySelectorAll('[role=listitem],[role=option],[role=row],li,[data-testid*="task" i]')];
+  const CB = '[role=checkbox],input[type=checkbox],[aria-label*="mark as" i],[aria-label*="complete" i],button[class*=checkBox i]';
+  const cands = [...document.querySelectorAll('[role=listitem],[role=option],[role=row],[role=treeitem],li,[data-testid*="task" i],[class*=taskItem i]')];
   const withCb = cands.filter((el) => el.querySelector(CB));
   const inner = withCb.filter((el) => !withCb.some((o) => o !== el && el.contains(o)));
   const tasks = [];
@@ -34,7 +34,7 @@ const EXTRACT_SOURCE = `(() => {
     tasks.push({ title: title.slice(0, 300), done });
   }
   const roles = {};
-  for (const r of ['listitem', 'option', 'row', 'checkbox', 'list', 'listbox', 'grid']) roles[r] = document.querySelectorAll('[role=' + r + ']').length;
+  for (const r of ['listitem', 'option', 'row', 'checkbox', 'list', 'listbox', 'grid', 'tree', 'treeitem']) roles[r] = document.querySelectorAll('[role=' + r + ']').length;
   const GENERIC = /^(mark as|mark task|complete|completed|not completed|add |delete|more|important|due |repeat|my day|planned|assigned|flagged|all$|tasks$|new task)/i;
   const outline = [];
   if (!tasks.length) {
