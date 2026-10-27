@@ -10,10 +10,10 @@ h2 { margin:0 0 10px; font-size:15px; font-weight:600; }
 .muted { color:var(--muted); }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .grow { flex:1; min-width:140px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow); }
 .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
 
-input[type=text], input[type=date], input[type=time], select {
+input[type=text], input[type=password], input[type=date], input[type=time], select {
   background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
   padding:8px 10px; font:inherit; }
 input:focus, select:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }

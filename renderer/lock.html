@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Locked</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  html, body { overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  .box { width:min(360px, 90vw); text-align:center; }
+  .box h1 { font-size:22px; margin-bottom:6px; }
+  .box input { width:100%; margin:18px 0 10px; text-align:center; font-size:18px; letter-spacing:.2em; }
+  .box button { width:100%; }
+  #msg { min-height:20px; margin-top:12px; color:var(--danger); font-size:13px; }
+</style>
+</head>
+<body>
+<main class="box card" aria-labelledby="h">
+  <h1 id="h">Transform Workstation is locked</h1>
+  <p class="sub" style="margin:0">Enter your PIN to carry on.</p>
+  <form id="f" autocomplete="off">
+    <input type="password" id="pin" aria-label="PIN" autofocus maxlength="32">
+    <button class="primary" id="go" type="submit">Unlock</button>
+  </form>
+  <div id="msg" role="alert" aria-live="polite"></div>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let timer = null;
+  function wait(sec) {
+    clearInterval(timer);
+    const input = $('pin'), go = $('go');
+    const tick = () => {
+      if (sec <= 0) { clearInterval(timer); input.disabled = false; go.disabled = false; $('msg').textContent = ''; input.focus(); return; }
+      input.disabled = true; go.disabled = true;
+      $('msg').textContent = 'Too many wrong tries. Please wait ' + sec + ' second' + (sec === 1 ? '' : 's') + '.';
+      sec -= 1;
+    };
+    tick();
+    if (sec > 0) timer = setInterval(tick, 1000);
+  }
+  $('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const r = await window.lk.unlock($('pin').value);
+    $('pin').value = '';
+    if (r && r.ok) return;
+    if (r && r.wait > 0) wait(r.wait);
+    else $('msg').textContent = 'That PIN is not right.';
+    $('pin').focus();
+  });
+  window.lk.state().then((s) => { if (s && s.wait > 0) wait(s.wait); $('pin').focus(); });
+  window.addEventListener('focus', () => $('pin').focus());
+</script>
+</body>
+</html>

@@ -16,20 +16,21 @@
   .opt { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:8px; cursor:pointer; }
   .opt[aria-selected="true"] { background:var(--sel); }
   .opt .l { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .opt .m { color:var(--muted); font-size:12px; flex:none; }
+  .opt .m { color:var(--muted); font-size:12px; flex:0 1 auto; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .none { padding:18px 16px; color:var(--muted); }
   #foot { display:flex; gap:14px; padding:7px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:11.5px; }
 </style>
 </head>
 <body>
 <div id="box" role="dialog" aria-modal="true" aria-label="Search and commands">
-  <input id="q" type="text" role="combobox" aria-expanded="true" aria-controls="list" aria-autocomplete="list" aria-activedescendant="" placeholder="Search sections, projects, tasks, events, commands…" autocomplete="off" spellcheck="false">
+  <input id="q" type="text" role="combobox" aria-expanded="true" aria-controls="list" aria-autocomplete="list" aria-activedescendant="" placeholder="Search sections, projects, tasks, events, commands and files on this PC…" autocomplete="off" spellcheck="false">
   <ul id="list" role="listbox" aria-label="Results"></ul>
-  <div id="foot"><span>↑↓ move</span><span>Enter open</span><span>Esc close</span></div>
+  <div id="foot"><span>↑↓ move</span><span>Enter open</span><span>Shift+Enter show file in folder</span><span>Esc close</span></div>
 </div>
 <script>
   const $ = (id) => document.getElementById(id);
   let all = [], shown = [], active = 0, recents = [];
+  let fileItems = [], fileTimer = null, fileSeq = 0, fileNote = '';
   const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
   async function load() {
@@ -48,6 +49,7 @@
     [...((data && data.events) || []), ...((feeds && feeds.events) || [])].filter((e) => e.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 300)
       .forEach((e) => items.push({ key: 'event:' + String(e.id).replace(/[^\w.-]/g, '').slice(0, 60), group: 'Events', label: e.title, meta: e.date, run: () => window.cc.navigate({ section: 'calendar', date: e.date }) }));
     items.push(
+      { key: 'cmd:back', group: 'Commands', label: 'Go back to the previous tab', meta: 'Alt+Q', run: () => window.cc.goBack() },
       { key: 'cmd:panel', group: 'Commands', label: 'Show or hide activity panel', meta: 'Ctrl+\\', run: () => window.cc.toggleFeed() },
       { key: 'cmd:reload', group: 'Commands', label: 'Reload this section', meta: 'F5', run: () => window.cc.reload() },
       { key: 'cmd:settings', group: 'Commands', label: 'Edit settings file', run: () => window.cc.openConfig() });
@@ -70,7 +72,7 @@
   function render() {
     const list = $('list');
     list.replaceChildren();
-    shown = filter($('q').value);
+    shown = filter($('q').value).concat(fileItems);
     if (active >= shown.length) active = 0;
     if (!shown.length) {
       const n = document.createElement('li'); n.className = 'none'; n.setAttribute('role', 'presentation'); n.textContent = 'No results'; list.append(n);
@@ -98,26 +100,48 @@
 
   function fit() { window.cc.paletteResize($('box').getBoundingClientRect().height + 2); }
 
-  function choose(idx) {
+  function choose(idx, reveal) {
     const it = shown[idx];
     if (!it) return;
-    if (/^[a-z]{2,10}:[\w.-]{1,60}$/i.test(it.key)) window.cc.pushRecent(it.key);
+    if (it.group !== FILES && /^[a-z]{2,10}:[\w.-]{1,60}$/i.test(it.key)) window.cc.pushRecent(it.key);
     window.cc.closePalette();
-    it.run();
+    if (reveal && it.reveal) it.reveal(); else it.run();
   }
 
-  $('q').addEventListener('input', () => { active = 0; render(); });
+  // Files and folders on this PC (Windows search index), looked up a moment after typing stops
+  const FILES = 'Files on this PC';
+  function searchFiles() {
+    clearTimeout(fileTimer);
+    const q = $('q').value.trim();
+    fileItems = [];
+    if (q.length < 2) return;
+    const seq = ++fileSeq;
+    fileTimer = setTimeout(async () => {
+      let r = null;
+      try { r = await window.cc.searchFiles(q); } catch { /* shown as unavailable */ }
+      if (seq !== fileSeq) return; // a newer search has started
+      if (!r || !r.ok) { fileItems = r && r.error ? [{ key: 'fileerr:0', group: FILES, label: r.error, run: () => {} }] : []; }
+      else fileItems = r.results.map((f) => ({
+        key: 'file:' + f.id, group: FILES, label: f.isFolder ? f.name + ' (folder)' : f.name, meta: f.folder,
+        run: () => { window.cc.openFoundFile(f.id, false); },
+        reveal: () => { window.cc.openFoundFile(f.id, true); },
+      }));
+      render();
+    }, 300);
+  }
+
+  $('q').addEventListener('input', () => { active = 0; render(); searchFiles(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.preventDefault(); window.cc.closePalette(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); if (shown.length) { active = (active + 1) % shown.length; mark(); } }
     else if (e.key === 'ArrowUp') { e.preventDefault(); if (shown.length) { active = (active - 1 + shown.length) % shown.length; mark(); } }
     else if (e.key === 'Home') { e.preventDefault(); active = 0; mark(); }
     else if (e.key === 'End') { e.preventDefault(); active = Math.max(0, shown.length - 1); mark(); }
-    else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+    else if (e.key === 'Enter') { e.preventDefault(); choose(active, e.shiftKey); }
     else if (e.key === 'Tab') { e.preventDefault(); } // focus stays in the search box
   });
 
-  window.cc.onPaletteOpen(async () => { $('q').value = ''; active = 0; await load(); render(); $('q').focus(); });
+  window.cc.onPaletteOpen(async () => { fileItems = []; fileSeq++; $('q').value = ''; active = 0; await load(); render(); $('q').focus(); });
 </script>
 </body>
 </html>
