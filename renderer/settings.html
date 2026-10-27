@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:">
+<title>Settings</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .page { max-width:920px; }
+  .bar { position:sticky; top:0; z-index:5; display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 0; margin:0 0 6px; background:var(--bg); border-bottom:1px solid var(--line); }
+  .bar .status { color:var(--muted); }
+  .bar .status.dirty { color:var(--warn); }
+  .section { margin-top:18px; }
+  .section h2 { margin-bottom:2px; }
+  .help { color:var(--muted); font-size:12.5px; margin:0 0 12px; }
+  .field { display:grid; grid-template-columns:200px minmax(0,1fr); gap:10px; align-items:center; margin:8px 0; }
+  .field label { color:var(--muted); }
+  @media (max-width:700px) { .field { grid-template-columns:1fr; } }
+  .rows { display:flex; flex-direction:column; gap:6px; }
+  .trow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+  .trow.hidden-tab { opacity:.6; }
+  .trow input[type=text] { min-width:0; }
+  .trow .lab { width:170px; } .trow .url { flex:1; min-width:200px; } .trow .nm { width:160px; } .trow .path { flex:1; min-width:200px; }
+  .trow .kind { font-size:11.5px; color:var(--muted); min-width:70px; }
+  .mv { padding:3px 8px; }
+  .addrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .addrow input[type=text] { min-width:0; }
+  .rm { color:var(--danger); }
+  details.adv { margin-top:18px; }
+  details.adv summary { cursor:pointer; font-weight:600; padding:6px 0; }
+  textarea.json { width:100%; min-height:340px; font:12.5px/1.5 Consolas, "Cascadia Mono", monospace; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:12px; resize:vertical; white-space:pre; overflow:auto; }
+  textarea.json:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .banner { padding:10px 14px; border-radius:10px; background:var(--accent-bg); color:var(--chip-fg); display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+  .banner[hidden] { display:none; }
+  .msg { padding:8px 12px; border-radius:8px; margin:8px 0; }
+  .msg.err { background:var(--err-bg); color:var(--err-fg); border:1px solid var(--err-line); }
+  .msg.ok { background:var(--ok-bg); color:var(--ok-fg); border:1px solid var(--ok-line); }
+  .msg[hidden] { display:none; }
+</style>
+</head>
+<body>
+<div class="page" id="root"><div class="empty">Loading…</div></div>
+
+<script src="common.js"></script>
+<script>
+  const root = document.getElementById('root');
+  const ICON_LABELS = { home: 'Home', folder: 'Folder', mail: 'Mail', calendar: 'Calendar', tasks: 'Tasks', chat: 'Chat', star: 'Star', briefcase: 'Briefcase', check: 'Tick', users: 'People', book: 'Book', chart: 'Chart', gear: 'Gear', globe: 'Globe' };
+  const SPELL = [['en-AU', 'English (Australia)'], ['en-GB', 'English (United Kingdom)'], ['en-US', 'English (United States)']];
+  const KIND = { web: 'Website', local: 'Built in', drmd: 'Built in', browser: 'Built in', disabled: 'Built in' };
+
+  let s = null;          // what the page last loaded from the app
+  let form = null;       // what is on screen
+  let dirty = false;
+  let restartNeeded = false;
+  let flash = null;      // { ok, text }
+
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  function markDirty() {
+    dirty = true;
+    const st = document.getElementById('status');
+    if (st) { st.textContent = 'You have changes that are not saved yet.'; st.className = 'status dirty'; }
+  }
+
+  function textInput(value, props, on) {
+    const i = h('input', { type: 'text', value: value || '', ...props });
+    i.addEventListener('input', () => { on(i.value); markDirty(); });
+    return i;
+  }
+
+  function move(list, i, d) { const j = i + d; if (j < 0 || j >= list.length) return; [list[i], list[j]] = [list[j], list[i]]; markDirty(); render(); }
+
+  function tabRows() {
+    const rows = form.sections.map((t, i) => {
+      const icon = h('select', { 'aria-label': 'Icon for ' + t.label }, Object.entries(ICON_LABELS).map(([v, l]) => h('option', { value: v, selected: t.icon === v, text: l })));
+      icon.addEventListener('change', () => { t.icon = icon.value; markDirty(); });
+      const isWeb = t.type === 'web' && !t.hidden;
+      return h('div', { class: 'trow' + (t.hidden ? ' hidden-tab' : ''), role: 'group', 'aria-label': t.label },
+        h('button', { class: 'mv', type: 'button', 'aria-label': 'Move ' + t.label + ' up', disabled: i === 0, onclick: () => move(form.sections, i, -1), text: '\u25b2' }),
+        h('button', { class: 'mv', type: 'button', 'aria-label': 'Move ' + t.label + ' down', disabled: i === form.sections.length - 1, onclick: () => move(form.sections, i, 1), text: '\u25bc' }),
+        textInput(t.label, { class: 'lab', maxlength: '40', 'aria-label': 'Name of tab ' + (i + 1) }, (v) => { t.label = v; }),
+        icon,
+        t.type === 'web' ? textInput(t.url, { class: 'url', placeholder: 'https://…', 'aria-label': 'Web address for ' + t.label, spellcheck: 'false' }, (v) => { t.url = v; })
+          : h('span', { class: 'kind', text: KIND[t.type] || 'Built in' }),
+        t.canHide && h('label', { class: 'row', style: 'gap:6px' }, h('input', { type: 'checkbox', checked: !t.hidden, onchange: (e) => { t.hidden = !e.target.checked; markDirty(); render(); } }), 'Show'),
+        t.canRemove && h('button', { class: 'ghost rm', type: 'button', onclick: () => { if (confirm('Remove the tab "' + t.label + '"? You can add it again later.')) { form.sections.splice(i, 1); markDirty(); render(); } }, text: 'Remove' }));
+    });
+    const name = h('input', { type: 'text', class: 'nm', maxlength: '40', placeholder: 'Name, for example Xero', 'aria-label': 'Name of the new tab' });
+    const url = h('input', { type: 'text', class: 'url', placeholder: 'https://example.com', spellcheck: 'false', 'aria-label': 'Web address of the new tab' });
+    const err = h('div', { class: 'msg err', hidden: true });
+    const add = h('button', { type: 'button', onclick: () => {
+      const n = name.value.trim(), u = url.value.trim();
+      let ok = false; try { ok = new URL(u).protocol === 'https:'; } catch { /* not a web address */ }
+      if (!n || !ok) { err.textContent = 'Give the tab a name and a full web address starting with https://'; err.hidden = false; return; }
+      form.sections.push({ id: null, label: n, icon: 'globe', type: 'web', url: u, hidden: false, canRemove: true, canHide: false });
+      markDirty(); render();
+    } }, 'Add tab');
+    return [h('div', { class: 'rows' }, rows), h('div', { class: 'addrow' }, name, url, add), err];
+  }
+
+  function feedRows() {
+    const rows = form.calendarFeeds.map((f, i) => h('div', { class: 'trow' },
+      textInput(f.name, { class: 'nm', maxlength: '40', placeholder: 'Name', 'aria-label': 'Name of calendar link ' + (i + 1) }, (v) => { f.name = v; }),
+      textInput(f.url, { class: 'url', placeholder: 'https://… (the .ics link)', spellcheck: 'false', 'aria-label': 'Address of calendar link ' + (i + 1) }, (v) => { f.url = v; }),
+      h('button', { class: 'ghost rm', type: 'button', onclick: () => { form.calendarFeeds.splice(i, 1); markDirty(); render(); }, text: 'Remove' })));
+    return [h('div', { class: 'rows' }, rows),
+      form.calendarFeeds.length < 5 && h('div', { class: 'addrow' }, h('button', { type: 'button', onclick: () => { form.calendarFeeds.push({ name: '', url: '' }); markDirty(); render(); } }, 'Add a calendar link'))];
+  }
+
+  function projectRows() {
+    const rows = form.projects.map((p, i) => {
+      const path = textInput(p.path, { class: 'path', placeholder: 'C:\\Projects\\My Project', spellcheck: 'false', 'aria-label': 'Folder for ' + (p.name || 'project ' + (i + 1)) }, (v) => { p.path = v; });
+      return h('div', { class: 'trow' },
+        textInput(p.name, { class: 'nm', maxlength: '40', placeholder: 'Name', 'aria-label': 'Name of project folder ' + (i + 1) }, (v) => { p.name = v; }),
+        path,
+        h('button', { type: 'button', onclick: async () => { const f = await window.cc.pickFolder(); if (f) { p.path = f; if (!p.name) p.name = f.split(/[\\/]/).filter(Boolean).pop() || ''; markDirty(); render(); } }, text: 'Browse…' }),
+        h('button', { class: 'ghost rm', type: 'button', onclick: () => { form.projects.splice(i, 1); markDirty(); render(); }, text: 'Remove' }));
+    });
+    return [h('div', { class: 'rows' }, rows),
+      h('div', { class: 'addrow' }, h('button', { type: 'button', onclick: async () => {
+        const f = await window.cc.pickFolder();
+        if (f) { form.projects.push({ id: null, name: f.split(/[\\/]/).filter(Boolean).pop() || 'Project', path: f }); markDirty(); render(); }
+      } }, 'Add a folder…'))];
+  }
+
+  function render() {
+    if (!s) return;
+    const active = document.activeElement;
+    const focusKey = active && active.getAttribute && active.getAttribute('aria-label');
+    const scrollY = window.scrollY;
+    const startSelect = h('select', { id: 'start', 'aria-label': 'Tab to open at start-up' },
+      form.sections.filter((t) => !t.hidden).map((t) => h('option', { value: t.id || '', selected: form.startSection === t.id, text: t.label })));
+    startSelect.addEventListener('change', () => { form.startSection = startSelect.value; markDirty(); });
+    const spell = h('select', { 'aria-label': 'Spell check language' }, SPELL.map(([v, l]) => h('option', { value: v, selected: form.spellCheckLanguage === v, text: l })));
+    spell.addEventListener('change', () => { form.spellCheckLanguage = spell.value; markDirty(); });
+    const outlook = h('input', { type: 'checkbox', id: 'outlook', checked: form.outlookDesktop, onchange: (e) => { form.outlookDesktop = e.target.checked; markDirty(); } });
+
+    const rawBox = h('textarea', { class: 'json', id: 'raw', spellcheck: 'false', 'aria-label': 'Settings file text', value: s.raw });
+    const rawMsg = h('div', { class: 'msg', hidden: true });
+    const rawSave = h('button', { type: 'button', onclick: async () => {
+      const r = await window.cc.saveSettingsRaw(rawBox.value);
+      rawMsg.hidden = false;
+      if (r && r.ok) { rawMsg.className = 'msg ok'; rawMsg.textContent = 'Saved. Restart Transform Workstation to use the new settings.'; restartNeeded = true; document.getElementById('banner').hidden = false; }
+      else { rawMsg.className = 'msg err'; rawMsg.textContent = (r && r.error) || 'Could not save.'; }
+    } }, 'Save advanced settings');
+
+    root.replaceChildren(
+      h('h1', { text: 'Settings' }),
+      h('p', { class: 'sub', text: 'Change how Transform Workstation looks and what it shows. Nothing here changes your files.' }),
+      h('div', { class: 'bar' },
+        h('button', { class: 'primary', id: 'save', type: 'button', onclick: save, text: 'Save changes' }),
+        h('button', { type: 'button', onclick: () => load(true), text: 'Undo unsaved changes' }),
+        h('span', { class: 'status' + (dirty ? ' dirty' : ''), id: 'status', role: 'status', text: dirty ? 'You have changes that are not saved yet.' : 'Everything is saved.' })),
+      h('div', { class: 'banner', id: 'banner', hidden: !restartNeeded }, h('span', { text: 'Restart Transform Workstation to show your changes to the tabs.' }), h('button', { class: 'primary', type: 'button', onclick: () => window.cc.restartApp(), text: 'Restart now' })),
+      h('div', { class: 'msg ' + (flash && flash.ok ? 'ok' : 'err'), id: 'flash', role: 'alert', hidden: !flash, text: flash ? flash.text : '' }),
+
+      h('div', { class: 'card section' }, h('h2', { text: 'About you' }),
+        h('div', { class: 'field' }, h('label', { for: 'uname', text: 'Your name' }), textInput(form.userName, { id: 'uname', maxlength: '60', placeholder: 'Shown in the Home greeting' }, (v) => { form.userName = v; })),
+        h('div', { class: 'field' }, h('label', { text: 'Spell check language' }), spell),
+        h('div', { class: 'field' }, h('label', { for: 'start', text: 'Open this tab at start-up' }), startSelect),
+        h('div', { class: 'field' }, h('label', { for: 'outlook', text: 'Outlook on Home' }), h('label', { class: 'row', style: 'gap:8px' }, outlook, 'Show unread emails and appointments from classic Outlook (Windows only)'))),
+
+      h('div', { class: 'card section' }, h('h2', { text: 'Tabs' }),
+        h('p', { class: 'help', text: 'These are the tabs down the left side. Use the arrows to change the order (you can also drag them on the left). Untick Show to hide a built-in tab. You can add any website as a tab.' }),
+        tabRows()),
+
+      h('div', { class: 'card section' }, h('h2', { text: 'Calendar links' }),
+        h('p', { class: 'help', text: 'Paste the calendar link (ending in .ics) from Outlook or Google Calendar to see those events in Transform Workstation. They are read-only. Up to 5.' }),
+        feedRows()),
+
+      h('div', { class: 'card section' }, h('h2', { text: 'Project folders' }),
+        h('p', { class: 'help', text: 'Folders you work in often. They appear under Favourites in the Explorer and can have their own tasks.' }),
+        projectRows()),
+
+      bgHost,
+      secHost,
+      bakHost,
+
+      h('details', { class: 'adv' },
+        h('summary', { text: 'Advanced: edit the settings file directly' }),
+        h('p', { class: 'help', text: 'Everything above is stored in one text file. You only need this for settings that are not on this page, such as drives, the apps list or the Microsoft To Do option. It checks the file before saving, and a copy of the old file is kept (the last ten) in the config-backups folder next to it. Keep the line "configVersion": 2 as it is.' }),
+        h('p', { class: 'help', text: 'File: ' + s.file }),
+        rawBox, h('div', { class: 'row', style: 'margin-top:8px' }, rawSave, h('button', { type: 'button', onclick: async () => { const r = await window.cc.openConfig(); if (r && !r.ok) { rawMsg.hidden = false; rawMsg.className = 'msg err'; rawMsg.textContent = r.error || 'Could not open the file.'; } }, text: 'Open in my text editor' })), rawMsg),
+      h('p', { class: 'muted', style: 'margin-top:22px;font-size:12.5px', text: 'Transform Workstation ' + s.version }));
+    window.scrollTo(0, scrollY);
+    if (focusKey) { const again = [...document.querySelectorAll('[aria-label]')].find((e) => e.getAttribute('aria-label') === focusKey); if (again && again.focus) again.focus(); }
+  }
+
+  // ---- Screen lock and backups: these act straight away (they are not part of "Save changes") ----
+  const secHost = h('div', { class: 'card section' });
+  const bakHost = h('div', { class: 'card section' });
+  let lockInfo = null;
+  let secMsg = null;   // { ok, text }
+  let bakMsg = null;
+  let bakList = [];
+  let confirmName = null;
+  const MINUTE_CHOICES = [[1, '1 minute'], [2, '2 minutes'], [5, '5 minutes'], [10, '10 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 hour']];
+
+  function pinBox(label, id) { return h('input', { type: 'password', id, 'aria-label': label, maxlength: '32', autocomplete: 'off' }); }
+
+  function renderSecurity() {
+    if (!lockInfo) { secHost.replaceChildren(h('h2', { text: 'Screen lock' }), h('p', { class: 'help', text: 'Loading…' })); return; }
+    const mins = h('select', { id: 'lockmins', 'aria-label': 'Lock after' }, MINUTE_CHOICES.map(([v, l]) => h('option', { value: String(v), selected: lockInfo.minutes === v, text: l })));
+    const cur = pinBox('Current PIN', 'pincur'), pn = pinBox(lockInfo.hasPin ? 'New PIN (leave empty to keep your PIN)' : 'Choose a PIN', 'pinnew'), pc = pinBox('Type the new PIN again', 'pinagain');
+    const say = (ok, text) => { secMsg = { ok, text }; renderSecurity(); };
+    const lockFile = s.file.replace(/[^\\/]*$/, '') + 'lock.json';
+    const save = async () => {
+      if (pn.value !== pc.value) return say(false, 'The two PINs do not match.');
+      if (!lockInfo.hasPin && !pn.value) return say(false, 'Choose a PIN first.');
+      const r = await window.cc.saveLock({ enabled: true, minutes: Number(mins.value), newPin: pn.value || null, currentPin: cur.value });
+      if (r && r.ok) { lockInfo = { hasPin: true, enabled: true, minutes: r.minutes }; say(true, 'Screen lock is on. Transform Workstation will lock after ' + (MINUTE_CHOICES.find((m) => m[0] === r.minutes) || [0, r.minutes + ' minutes'])[1] + ' without use.'); }
+      else say(false, (r && r.error) || 'Could not save the lock settings.');
+    };
+    const off = async () => {
+      const r = await window.cc.removeLock(cur.value);
+      if (r && r.ok) { lockInfo = { hasPin: false, enabled: false, minutes: lockInfo.minutes }; say(true, 'Screen lock is off and the PIN has been removed.'); }
+      else say(false, (r && r.error) || 'Could not turn the lock off.');
+    };
+    secHost.replaceChildren(
+      h('h2', { text: 'Screen lock' }),
+      h('p', { class: 'help', text: 'Covers Transform Workstation with a PIN screen after a quiet spell, when Windows locks or the PC sleeps, and when you start the app. Press Ctrl+Shift+L to lock straight away. This keeps people away from your open sign-ins; it does not replace Windows sign-in or BitLocker.' }),
+      h('p', { class: 'help', text: lockInfo.hasPin ? 'The lock is on.' : 'The lock is off. Choose a PIN (4 to 32 characters) to turn it on.' }),
+      h('div', { class: 'field' }, h('label', { for: 'lockmins', text: 'Lock after' }), mins),
+      lockInfo.hasPin ? h('div', { class: 'field' }, h('label', { for: 'pincur', text: 'Current PIN' }), cur) : '',
+      h('div', { class: 'field' }, h('label', { for: 'pinnew', text: lockInfo.hasPin ? 'New PIN (optional)' : 'PIN' }), pn),
+      h('div', { class: 'field' }, h('label', { for: 'pinagain', text: 'Type it again' }), pc),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'primary', type: 'button', onclick: save, text: lockInfo.hasPin ? 'Save lock settings' : 'Turn on screen lock' }),
+        lockInfo.hasPin ? h('button', { type: 'button', onclick: () => window.cc.lockNow(), text: 'Lock now' }) : '',
+        lockInfo.hasPin ? h('button', { type: 'button', class: 'rm', onclick: off, text: 'Turn off and remove PIN' }) : ''),
+      h('div', { class: 'msg ' + (secMsg && secMsg.ok ? 'ok' : 'err'), role: 'alert', hidden: !secMsg, text: secMsg ? secMsg.text : '' }),
+      h('p', { class: 'help', style: 'margin-top:10px', text: 'Forgotten your PIN? Close Transform Workstation, delete the file ' + lockFile + ' and start it again. Wrong guesses make the lock screen wait before it lets you try again.' }));
+  }
+
+  function renderBackups() {
+    const fmt = (iso) => { try { return new Date(iso).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+    const rows = bakList.length
+      ? bakList.map((b) => h('div', { class: 'trow' },
+        h('span', { class: 'grow', text: fmt(b.when) }),
+        h('button', { type: 'button', class: confirmName === b.name ? 'primary' : '', 'aria-label': 'Restore the settings from ' + fmt(b.when), onclick: async () => {
+          if (confirmName !== b.name) { confirmName = b.name; renderBackups(); return; }
+          confirmName = null;
+          const r = await window.cc.restoreBackup(b.name);
+          if (r && r.ok) { bakMsg = { ok: true, text: 'Restored. Restart Transform Workstation to use the old settings. The settings you had just now were kept as a backup too.' }; restartNeeded = true; const bn = document.getElementById('banner'); if (bn) bn.hidden = false; await refreshBackups(); }
+          else { bakMsg = { ok: false, text: (r && r.error) || 'Could not restore that backup.' }; renderBackups(); }
+        }, text: confirmName === b.name ? 'Click again to restore' : 'Restore' })))
+      : [h('p', { class: 'help', text: 'No backups yet. One is made each time you save here.' })];
+    bakHost.replaceChildren(
+      h('h2', { text: 'Settings backups' }),
+      h('p', { class: 'help', text: 'Each save keeps a copy of the settings it replaced (the last ten). If a change goes wrong, restore an earlier copy. Restoring needs a restart.' }),
+      h('div', { class: 'rows' }, rows),
+      h('div', { class: 'msg ' + (bakMsg && bakMsg.ok ? 'ok' : 'err'), role: 'alert', hidden: !bakMsg, text: bakMsg ? bakMsg.text : '' }));
+  }
+
+  // ---- Home page background (acts straight away, like the lock and backups) ----
+  const bgHost = h('div', { class: 'card section' });
+  let bgInfo = undefined; // undefined = loading, null = none chosen, { dataUrl, dim }
+  let bgMsg = null;
+  let recentOn = true;
+  let bgTimer = null;
+  function renderBackground() {
+    if (bgInfo === undefined) { bgHost.replaceChildren(h('h2', { text: 'Home page' }), h('p', { class: 'help', text: 'Loading…' })); return; }
+    const say = (ok, text) => { bgMsg = { ok, text }; renderBackground(); };
+    const choose = async () => {
+      const r = await window.cc.pickBackground();
+      if (r && r.ok) { bgInfo = await window.cc.getHomeBackground(); say(true, 'Background set. Open Home to see it.'); }
+      else if (r && !r.cancelled) say(false, r.error || 'Could not use that picture.');
+    };
+    const remove = async () => { const r = await window.cc.removeBackground(); if (r && r.ok) { bgInfo = null; say(true, 'Background removed.'); } else say(false, 'Could not remove the background.'); };
+    const dim = h('input', { type: 'range', min: '0', max: '85', step: '5', value: String(bgInfo ? bgInfo.dim : 35), 'aria-label': 'Dim the picture', style: 'width:220px' });
+    const dimLabel = h('span', { class: 'muted', text: (bgInfo ? bgInfo.dim : 35) + '%' });
+    dim.addEventListener('input', () => {
+      dimLabel.textContent = dim.value + '%';
+      clearTimeout(bgTimer);
+      bgTimer = setTimeout(() => { if (bgInfo) bgInfo.dim = Number(dim.value); window.cc.setBackgroundDim(Number(dim.value)); }, 250);
+    });
+    bgHost.replaceChildren(
+      h('h2', { text: 'Home page' }),
+      h('label', { class: 'row', style: 'gap:8px;margin:2px 0 14px' },
+        h('input', { type: 'checkbox', id: 'recentOn', checked: recentOn, onchange: async (e) => { recentOn = e.target.checked; await window.cc.setHomeRecent(recentOn); } }),
+        'Show "Pick up where you left off" (files and folders you opened lately)'),
+      h('h2', { text: 'Background picture' }),
+      h('p', { class: 'help', text: 'Show a picture behind the Home page. PNG, JPG or WebP, up to 8 MB. A copy is kept inside the app, so the original can be moved or deleted. Dimming the picture keeps the writing easy to read.' }),
+      bgInfo ? h('img', { src: bgInfo.dataUrl, alt: 'Preview of the chosen background', style: 'display:block;max-width:320px;max-height:180px;border-radius:10px;border:1px solid var(--line);margin:6px 0 12px;object-fit:cover' }) : '',
+      h('div', { class: 'row' },
+        h('button', { type: 'button', class: 'primary', onclick: choose, text: bgInfo ? 'Choose a different picture…' : 'Choose a picture…' }),
+        bgInfo ? h('button', { type: 'button', class: 'rm', onclick: remove, text: 'Remove background' }) : ''),
+      bgInfo ? h('div', { class: 'field', style: 'margin-top:12px' }, h('label', { text: 'Dim the picture' }), h('div', { class: 'row' }, dim, dimLabel)) : '',
+      h('div', { class: 'msg ' + (bgMsg && bgMsg.ok ? 'ok' : 'err'), role: 'alert', hidden: !bgMsg, text: bgMsg ? bgMsg.text : '' }));
+  }
+  async function refreshBackground() { bgInfo = await window.cc.getHomeBackground(); const r = await window.cc.getHomeRecent(); recentOn = !(r && r.on === false); renderBackground(); }
+
+  async function refreshBackups() { bakList = (await window.cc.listBackups()) || []; renderBackups(); }
+  async function refreshSecurity() { lockInfo = await window.cc.getLock(); renderSecurity(); }
+
+  async function save() {
+    const patch = {
+      userName: form.userName, spellCheckLanguage: form.spellCheckLanguage, outlookDesktop: form.outlookDesktop, startSection: form.startSection,
+      calendarFeeds: form.calendarFeeds, projects: form.projects,
+      sections: form.sections.map((t) => ({ id: t.id, label: t.label, icon: t.icon, url: t.url, hidden: !!t.hidden })),
+    };
+    const r = await window.cc.saveSettings(patch);
+    if (r && r.ok) {
+      flash = { ok: true, text: 'Saved.' };
+      if (r.restartNeeded) restartNeeded = true;
+      dirty = false;
+      await load(false, true);
+    } else {
+      flash = { ok: false, text: (r && r.error) || 'Could not save your settings.' };
+      render();
+      window.scrollTo(0, 0);
+    }
+  }
+
+  async function load(discard, keepFlash) {
+    const data = await window.cc.getSettingsPage();
+    if (!data) return;
+    s = data;
+    if (data.restartPending) restartNeeded = true;
+    form = clone({ userName: data.userName, spellCheckLanguage: data.spellCheckLanguage, outlookDesktop: data.outlookDesktop, startSection: data.startSection,
+      calendarFeeds: data.calendarFeeds, projects: data.projects, sections: data.sections });
+    form.calendarFeeds = form.calendarFeeds.map((f) => ({ name: f.name, url: f.url }));
+    if (discard) { dirty = false; flash = null; }
+    if (!keepFlash && !discard) flash = null;
+    render();
+  }
+
+  window.addEventListener('focus', () => { if (!dirty) load(false, true); refreshBackups(); });
+  load(false);
+  refreshSecurity();
+  refreshBackups();
+  refreshBackground();
+</script>
+</body>
+</html>
