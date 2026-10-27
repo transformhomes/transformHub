@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src data:; script-src 'self' 'unsafe-inline'">
-<title>TH Command Centre</title>
+<title>Transform Workstation</title>
 <link rel="stylesheet" href="theme.css">
 <style>
   /* Layout numbers must match RAIL_W / FEED_W / HEADER_H / GAP / RADIUS in main.js */
@@ -22,6 +22,9 @@
   button.item:hover { background:var(--hover); color:var(--fg); }
   button.item[aria-current="page"] { background:var(--hover); color:var(--accent); }
   button.item[aria-current="page"]::before { content:""; position:absolute; left:-6px; top:10px; bottom:10px; width:3px; border-radius:0 3px 3px 0; background:var(--accent); }
+  button.item.dragging { opacity:.4; }
+  button.item.drop-before { box-shadow:0 -2px 0 0 var(--accent); }
+  button.item.drop-after { box-shadow:0 2px 0 0 var(--accent); }
   button.item:disabled { opacity:.35; cursor:not-allowed; }
   svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; flex:none; }
   button.logo { width:44px; height:44px; border:0; background:transparent; padding:0; margin:2px 0 8px; border-radius:10px; cursor:pointer; flex:none; }
@@ -75,6 +78,17 @@
   #stage { position:fixed; top:var(--header-h); right:var(--gap); bottom:var(--gap); left:calc(var(--rail-w) + var(--feed-w) + var(--gap)); background:var(--stage); border:1px solid var(--line); border-radius:var(--radius); pointer-events:none; }
   body.feed-closed #stage { left:calc(var(--rail-w) + var(--gap)); }
   @media (prefers-reduced-motion: no-preference) { button.item, .hb, .fi { transition:background .12s, color .12s; } }
+  .ctx { position:fixed; z-index:50; min-width:220px; padding:6px; background:var(--card); border:1px solid var(--line-strong); border-radius:10px; box-shadow:var(--shadow); }
+  .ctx button { display:block; width:100%; text-align:left; border:0; background:transparent; color:var(--fg); font:inherit; border-radius:6px; padding:7px 10px; cursor:pointer; }
+  .ctx button:hover, .ctx button:focus-visible { background:var(--hover); outline:none; }
+  .ctx hr { border:0; border-top:1px solid var(--line); margin:5px 2px; }
+  .pmodal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(0,0,0,.45); }
+  .pmodal .pbox { width:min(480px, calc(100vw - 40px)); background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow); color:var(--fg); }
+  .pmodal h2 { margin:0 0 4px; font-size:15px; }
+  .pmodal dl { display:grid; grid-template-columns:110px 1fr; gap:6px 12px; margin:12px 0 16px; }
+  .pmodal dt { color:var(--muted); }
+  .pmodal dd { margin:0; word-break:break-all; user-select:text; }
+  .pmodal button { font:inherit; color:var(--on-accent); background:var(--accent); border:1px solid var(--accent); border-radius:8px; padding:7px 16px; cursor:pointer; font-weight:600; }
 </style>
 </head>
 <body>
@@ -104,6 +118,7 @@
 
 <div id="stage" aria-hidden="true"></div>
 
+<script src="sortable.js"></script>
 <script>
   const ICONS = {
     home:     '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
@@ -117,6 +132,7 @@
     check:    '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/>',
     users:    '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.3a3.2 3.2 0 0 1 0 5.4M18 14.3c1.8.8 3 2.7 3 5.7"/>',
     book:     '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
+    globe:    '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
     chart:    '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     gear:     '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/>',
   };
@@ -132,6 +148,7 @@
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
   let favicons = {};
+  let secIcons = {}; // pictures taken from a program's own icon (a section's "iconFile" setting)
   let todo = { enabled: false, tasks: [] };
   let sections = [], current = null, data = { tasks: [], events: [] }, feeds = { events: [] }, projects = [];
   const buttons = new Map();
@@ -142,14 +159,15 @@
     rail.replaceChildren();
     if (keepLogo) rail.append(keepLogo);
     buttons.clear();
-    sections.forEach((s, i) => {
+    sections.filter((s) => s.id !== 'settings').forEach((s, i) => {
       const b = el('button', 'item');
-      const fav = s.type === 'web' && favicons[s.id];
+      b.dataset.id = s.id;
+      const fav = secIcons[s.id] || (s.type === 'web' && favicons[s.id]);
       if (fav) { const im = document.createElement('img'); im.className = 'fav'; im.src = fav; im.alt = ''; b.append(im); }
       else b.innerHTML = svg(s.icon);
       if (/^[a-z]{2,12}$/.test(s.icon || '')) b.style.setProperty('--ic', 'var(--ic-' + s.icon + ', var(--muted))');
       b.append(el('span', null, s.label.replace(/ \(.*\)$/, '')));
-      b.title = s.label + (i < 9 ? '  (Ctrl+' + (i + 1) + ' / Alt+' + (i + 1) + ' in web tabs)' : '');
+      b.title = s.label + (i < 9 ? '  (Ctrl+' + (i + 1) + ' / Alt+' + (i + 1) + ' in web tabs)' : '') + '  — drag to move, or Alt+Shift+Up/Down';
       b.setAttribute('aria-label', s.label);
       if (s.type === 'disabled') b.disabled = true;
       b.addEventListener('click', () => window.cc.select(s.id));
@@ -160,10 +178,24 @@
     const cfg = el('button', 'item');
     cfg.innerHTML = svg('gear');
     cfg.append(el('span', null, 'Settings'));
-    cfg.title = 'Edit settings file';
-    cfg.setAttribute('aria-label', 'Edit settings file');
-    cfg.addEventListener('click', () => window.cc.openConfig());
+    cfg.title = 'Settings';
+    cfg.setAttribute('aria-label', 'Settings');
+    cfg.dataset.id = 'settings';
+    cfg.addEventListener('click', () => window.cc.select('settings'));
     rail.append(cfg);
+    buttons.set('settings', cfg);
+    makeSortable(rail, {
+      item: 'button.item', axis: 'y',
+      idOf: (b) => (b.dataset.id && b.dataset.id !== 'settings' ? b.dataset.id : null),
+      onReorder: async (ids, focusId) => {
+        const r = await window.cc.reorderSections(ids);
+        if (!r || !r.ok) return;
+        const byId = new Map(sections.map((x) => [x.id, x]));
+        sections = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id === 'settings')];
+        buildRail(); markCurrent();
+        if (focusId && buttons.get(focusId)) buttons.get(focusId).focus();
+      },
+    });
   }
 
   function markCurrent() {
@@ -252,6 +284,7 @@
       window.cc.navigate({ section: 'projects', project, path: rel });
     });
     row.append(chev, name);
+    row.addEventListener('contextmenu', (e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, project, rel, isDir, label); });
     if (isDir && rel !== '') {
       const pinned = isFav(project, rel);
       const star = el('button', 'star' + (pinned ? ' on' : ''), pinned ? '★' : '☆');
@@ -269,6 +302,73 @@
       else kids.forEach((en) => addNode(parent, project, joinPath(rel, en.name), en.name, en.dir, depth + 1));
     }
   }
+
+  // ---- Right-click menu for folders and files in the Explorer side panel ----
+  let menuEl = null;
+  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+  function closeProps() { const m = document.getElementById('propsModal'); if (m) m.remove(); }
+  function sideNote(ok, text) {
+    const m = el('div', 'tmsg', text);
+    if (!ok) m.style.color = 'var(--danger)';
+    $('tree').prepend(m);
+    setTimeout(() => m.remove(), 5000);
+  }
+  async function showProps(project, rel) {
+    const r = await window.cc.getProperties(project, rel);
+    if (!r || !r.ok) { sideNote(false, (r && r.error) || 'Could not read the properties.'); return; }
+    const when = (ms) => (ms ? new Date(ms).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Unknown');
+    const size = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+    const rows = [['Name', r.name], ['Type', r.kind === 'folder' ? 'Folder' : (r.type ? r.type + ' file' : 'File')], ['Location', r.path],
+      r.kind === 'folder' ? ['Contains', r.items == null ? 'Unknown' : r.items + (r.items === 1 ? ' item' : ' items')] : ['Size', size(r.size) + ' (' + r.size.toLocaleString('en-AU') + ' bytes)'],
+      ['Created', when(r.created)], ['Modified', when(r.modified)], ['Opened', when(r.accessed)], ['Read-only', r.readOnly ? 'Yes' : 'No']];
+    closeProps();
+    const modal = el('div', 'pmodal'); modal.id = 'propsModal';
+    const box = el('div', 'pbox'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Properties');
+    const dl = el('dl');
+    rows.forEach(([k, v]) => { dl.append(el('dt', null, k), el('dd', null, String(v))); });
+    const close = el('button', null, 'Close'); close.type = 'button'; close.addEventListener('click', closeProps);
+    box.append(el('h2', null, 'Properties'), dl, close);
+    modal.append(box);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeProps(); });
+    document.body.append(modal);
+    close.focus();
+  }
+  function openMenu(x, y, project, rel, isDir, label) {
+    closeMenu();
+    const act = async (fn, okText) => { const r = await fn(); sideNote(!!(r && r.ok), r && r.ok ? okText : ((r && r.error) || 'Could not do that.')); };
+    const item = (text, fn) => { const b = el('button', null, text); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.addEventListener('click', () => { closeMenu(); fn(); }); return b; };
+    const items = [];
+    if (isDir) {
+      items.push(item('Open', () => { toggle(project, rel, true); window.cc.navigate({ section: 'projects', project, path: rel }); }));
+      items.push(item('Open in File Explorer', () => act(() => window.cc.openFile(project, rel), 'Opened in File Explorer.')));
+    } else {
+      items.push(item('Open', () => act(() => window.cc.openFile(project, rel), 'Opened.')));
+      items.push(item('Show in File Explorer', () => act(() => window.cc.revealFile(project, rel), 'Shown in File Explorer.')));
+    }
+    items.push(el('hr'));
+    items.push(item('Open in PowerShell here', () => act(() => window.cc.openPowerShell(project, rel), 'Opened PowerShell.')));
+    items.push(item('Copy path', () => act(() => window.cc.copyPath(project, rel), 'Path copied.')));
+    if (isDir && rel) { const pinned = isFav(project, rel); items.push(item(pinned ? 'Remove from favourites' : 'Add to favourites', () => window.cc.toggleFav(project, rel, label))); }
+    items.push(el('hr'));
+    items.push(item('Properties', () => showProps(project, rel)));
+    const menu = el('div', 'ctx'); menu.setAttribute('role', 'menu');
+    menu.append(...items);
+    document.body.append(menu);
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + 'px';
+    menuEl = menu;
+    const first = menu.querySelector('button'); if (first) first.focus();
+  }
+  document.addEventListener('click', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
+  window.addEventListener('blur', closeMenu);
+  window.addEventListener('resize', closeMenu);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (menuEl) { closeMenu(); e.preventDefault(); } else if (document.getElementById('propsModal')) { closeProps(); e.preventDefault(); } return; }
+    if (menuEl && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const b = [...menuEl.querySelectorAll('button')]; const i = b.indexOf(document.activeElement);
+      b[(i + (e.key === 'ArrowDown' ? 1 : -1) + b.length) % b.length].focus(); e.preventDefault();
+    }
+  });
 
   let roots = { projects: [], drives: [], favs: [], apps: [] };
   const isFav = (project, rel) => roots.favs.some((f) => f.root === project && f.rel === rel);
@@ -382,7 +482,7 @@
   window.cc.getLogo().then((url) => {
     if (!url) return;
     const img = document.createElement('img');
-    img.src = url; img.alt = 'transformHub'; img.id = 'logoImg';
+    img.src = url; img.alt = 'Transform Workstation'; img.id = 'logoImg';
     const btn = el('button', 'logo'); btn.title = 'Home'; btn.setAttribute('aria-label', 'Home');
     btn.append(img);
     btn.addEventListener('click', () => window.cc.select('home'));
@@ -412,6 +512,7 @@
 
   (async () => {
     favicons = (await window.cc.getFavicons()) || {};
+    secIcons = (window.cc.getSectionIcons && (await window.cc.getSectionIcons())) || {};
     todo = (await window.cc.getTodo()) || todo;
     sections = await window.cc.getSections();
     buildRail();
