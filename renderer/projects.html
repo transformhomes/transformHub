@@ -28,6 +28,15 @@
   .ico.dir { border-color:var(--accent); background:var(--accent-bg); }
   pre.preview { margin:12px 0 0; padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:auto; max-height:calc(100vh - 260px);
     font:12.5px/1.55 Consolas, "Cascadia Mono", monospace; white-space:pre-wrap; word-break:break-word; user-select:text; }
+  .ctx { position:fixed; z-index:50; min-width:220px; padding:6px; background:var(--card); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  .ctx button { display:block; width:100%; text-align:left; border:0; background:transparent; border-radius:6px; padding:7px 10px; }
+  .ctx button:hover, .ctx button:focus-visible { background:var(--hover); outline:none; }
+  .ctx hr { border:0; border-top:1px solid var(--line); margin:5px 2px; }
+  .modal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(0,0,0,.45); }
+  .modal .box { width:min(480px, calc(100vw - 40px)); }
+  .modal dl { display:grid; grid-template-columns:110px 1fr; gap:6px 12px; margin:12px 0 16px; }
+  .modal dt { color:var(--muted); }
+  .modal dd { margin:0; word-break:break-all; user-select:text; }
   img.preview { max-width:100%; max-height:calc(100vh - 260px); margin-top:12px; border-radius:8px; border:1px solid var(--line); background:var(--well); }
 </style>
 </head>
@@ -188,7 +197,7 @@
       h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
     if (!view.entries.length) list.append(h('div', { class: 'empty', style: 'padding:14px', text: 'This folder is empty.' }));
     view.entries.forEach((en) => {
-      list.append(h('button', { class: 'frow', role: 'listitem', onclick: () => goTo(p.id, join(loc.path, en.name)) },
+      list.append(h('button', { class: 'frow', role: 'listitem', 'data-name': en.name, 'data-dir': en.dir ? '1' : '', onclick: () => goTo(p.id, join(loc.path, en.name)) },
         h('span', { class: 'n' }, h('span', { class: 'ico' + (en.dir ? ' dir' : ''), 'aria-hidden': 'true' }), h('span', { class: 't', text: en.name })),
         h('span', { class: 'm', text: dateLabel(en.mtime) }),
         h('span', { class: 'm', text: en.dir ? '' : sizeLabel(en.size) })));
@@ -242,6 +251,85 @@
     if (view.kind === 'file') return renderFile(p);
     renderDir(p);
   }
+
+  // ---- right-click menu and Properties ----
+  let menuEl = null;
+  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+  function closeModal() { const m = document.getElementById('propsModal'); if (m) m.remove(); }
+
+  async function showProps(p, rel) {
+    const r = await window.cc.getProperties(p.id, rel);
+    if (!r || !r.ok) { note = { ok: false, text: (r && r.error) || 'Could not read the properties.' }; render(); return; }
+    const when = (ms) => (ms ? new Date(ms).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Unknown');
+    const rows = [['Name', r.name], ['Type', r.kind === 'folder' ? 'Folder' : (r.type ? r.type + ' file' : 'File')], ['Location', r.path],
+      r.kind === 'folder' ? ['Contains', r.items == null ? 'Unknown' : r.items + (r.items === 1 ? ' item' : ' items')] : ['Size', sizeLabel(r.size) + ' (' + r.size.toLocaleString('en-AU') + ' bytes)'],
+      ['Created', when(r.created)], ['Modified', when(r.modified)], ['Opened', when(r.accessed)], ['Read-only', r.readOnly ? 'Yes' : 'No']];
+    closeModal();
+    const close = h('button', { class: 'primary', onclick: closeModal, text: 'Close' });
+    const modal = h('div', { class: 'modal', id: 'propsModal', onclick: (e) => { if (e.target === modal) closeModal(); } },
+      h('div', { class: 'card box', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Properties' },
+        h('h2', { text: 'Properties' }),
+        h('dl', {}, rows.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })])),
+        h('div', { class: 'row' }, close)));
+    document.body.append(modal);
+    close.focus();
+  }
+
+  function openMenu(x, y, p, rel, isDir) {
+    closeMenu();
+    const isFav0 = isDir && rel && isFav(p.id, rel);
+    const ext = (/\.[^./]+$/.exec(rel) || [''])[0].toLowerCase();
+    const item = (label, fn) => h('button', { role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, label);
+    const items = [];
+    if (isDir) {
+      if (rel !== loc.path) items.push(item('Open', () => goTo(p.id, rel)));
+      items.push(item('Open in File Explorer', () => act(() => window.cc.openFile(p.id, rel), 'Opened in File Explorer.')));
+    } else {
+      items.push(item('Open', () => act(() => window.cc.openFile(p.id, rel), 'Opened.')));
+      items.push(item('Show in File Explorer', () => act(() => window.cc.revealFile(p.id, rel), 'Shown in File Explorer.')));
+      (roots.apps || []).filter((a) => a.types.includes(ext)).forEach((a) => items.push(item('Open with ' + a.name, () => act(() => window.cc.openWith(a.id, p.id, rel), 'Opened in ' + a.name + '.'))));
+    }
+    items.push(h('hr'));
+    items.push(item('Open in PowerShell here', () => act(() => window.cc.openPowerShell(p.id, rel), 'Opened PowerShell.')));
+    items.push(item('Copy path', () => act(() => window.cc.copyPath(p.id, rel), 'Path copied.')));
+    if (isDir && rel) items.push(item(isFav0 ? 'Remove from favourites' : 'Add to favourites', async () => {
+      const r = await window.cc.toggleFav(p.id, rel, rel.split('/').pop());
+      if (r && r.ok) roots.favs = r.favs; else note = { ok: false, text: (r && r.error) || 'Could not change favourites.' };
+      render();
+    }));
+    items.push(h('hr'));
+    items.push(item('Properties', () => showProps(p, rel)));
+    const menu = h('div', { class: 'ctx', role: 'menu' }, items);
+    document.body.append(menu);
+    const w = menu.offsetWidth, hgt = menu.offsetHeight;
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - hgt - 4)) + 'px';
+    menuEl = menu;
+    const first = menu.querySelector('button'); if (first) first.focus();
+  }
+
+  document.addEventListener('contextmenu', (e) => {
+    const p = rootById(loc.project);
+    if (!p || !view) return; // the list of places has nothing to act on
+    if (e.target.closest('.ctx, .modal, input, textarea, pre.preview')) return; // keep normal editing and copying menus
+    e.preventDefault();
+    if (view.kind === 'dir') {
+      const row = e.target.closest('.frow[data-name]');
+      if (row) openMenu(e.clientX, e.clientY, p, join(loc.path, row.dataset.name), row.dataset.dir === '1');
+      else openMenu(e.clientX, e.clientY, p, loc.path, true);
+    } else if (view.kind === 'file') openMenu(e.clientX, e.clientY, p, loc.path, false);
+  });
+  document.addEventListener('click', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
+  window.addEventListener('blur', closeMenu);
+  window.addEventListener('resize', closeMenu);
+  document.addEventListener('scroll', closeMenu, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (menuEl) { closeMenu(); e.preventDefault(); } else if (document.getElementById('propsModal')) { closeModal(); e.preventDefault(); } return; }
+    if (menuEl && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const b = [...menuEl.querySelectorAll('button')]; const i = b.indexOf(document.activeElement);
+      b[(i + (e.key === 'ArrowDown' ? 1 : -1) + b.length) % b.length].focus(); e.preventDefault();
+    }
+  });
 
   window.cc.onNavigate((p) => applyLoc(p));
   window.cc.getRoots().then((r) => { roots = r || roots; App.init(() => { if (!started) { started = true; load(); } else render(); }); });
