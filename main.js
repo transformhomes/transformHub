@@ -1,10 +1,21 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, Menu, net, webContents } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, Menu, net, webContents, dialog, protocol, clipboard, powerMonitor } = require('electron');
+const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
 const { createStore } = require('./store');
 const { createFeedService, validFeeds } = require('./feeds');
 const { createUiState } = require('./uistate');
 const { createTodoSync } = require('./todo');
+const { createDrmd } = require('./drmd');
+const { createBrowser } = require('./browser');
+const { createOutlook } = require('./outlook');
+const { buildSettings, rawSettingsError } = require('./settings');
+const { setupSpellcheck, contextTemplate } = require('./spell');
+const { createLock, MAX_PIN } = require('./lock');
+const { createFileSearch } = require('./filesearch');
+const { createRecent } = require('./recent');
+const { listBackups, restoreBackup } = require('./backups');
+const { execFile } = require('child_process');
 const { nativeTheme, nativeImage } = require('electron');
 
 // Same data folder whether started with "npm start" or from the installer.
@@ -22,12 +33,21 @@ const GAP = 8;         // space around the main card
 const RADIUS = 12;     // rounded corners of the main card and the palette
 const PALETTE_W = 620, PALETTE_TOP = 64, PALETTE_MIN_H = 150, PALETTE_MAX_H = 480;
 const PARTITION = 'persist:th-command-centre'; // one shared login session for Microsoft + Claude
+const DRMD_PARTITION = 'persist:th-drmd';       // Dr. MD keeps its own storage, apart from the sign-in session
+const DRMD_DIR = path.join(__dirname, 'drmd');   // the built Dr. MD page (see the README: npm run drmd)
+const BROWSER_PARTITION = 'persist:th-browser'; // the Browser tab keeps its own sign-ins and history, apart from everything else
+const VAULT_PARTITION = 'persist:th-vault';     // the password vault (Bitwarden) keeps its own storage, apart from every other site
+const VAULT_HOSTS = /(^|\.)bitwarden\.(com|eu)$/i;
+const KEEP_SIGNED_IN_DAYS = 30;                 // sign-ins for the sites listed under "keepSignedIn" last this long between restarts
+const DRMD_URL = 'drmd://app/';
+const DRMD_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const INTERNAL_HOSTS = /(^|\.)(microsoftonline\.com|microsoft\.com|cloud\.microsoft|domo\.com|buildertrend\.net|buildertrend\.com|microsoft365\.com|office\.com|office365\.com|live\.com|sharepoint\.com|msauth\.net|msftauth\.net|msecnd\.net|claude\.ai|anthropic\.com)$/i;
 
 let win = null;
 let sections = [];
 const views = new Map(); // id -> WebContentsView
 let currentId = null;
+let previousId = null; // the tab you were on before this one (Alt+Q goes back to it)
 let loadedConfig = null;
 let store = null;
 let feedService = null;
@@ -36,6 +56,22 @@ let paletteView = null;
 let paletteOpen = false;
 let paletteH = PALETTE_MIN_H;
 const localContentsIds = new Set(); // webContents ids of built-in pages allowed to use the data bridge
+const drmdContentsIds = new Set();  // webContents ids of Dr. MD (allowed to use the Dr. MD file bridge only)
+let drmdService = null;
+let browserService = null;
+let outlookService = null;
+let recentSvc = null;
+let fileSearch = null; // created on first use (a test can supply its own)
+let testPickImage = null; // set by the test hook to stand in for the picture picker
+let testPickFolder = null; // set by the test hook to stand in for the folder picker
+let testPickApp = null; // set by the test hook to stand in for the file picker
+let spawnShell = null; // set by the test hook to stand in for starting PowerShell
+let outlookRun = null; // set by the test hook to stand in for PowerShell
+const browserShellIds = new Set(); // webContents id of the Browser tab's toolbar page
+let testDialogs = null; // set only by the test hook, to stand in for the native Open and Save dialogs
+
+// drmd:// must be declared before the app is ready. It serves the built Dr. MD files like a small website.
+protocol.registerSchemesAsPrivileged([{ scheme: 'drmd', privileges: { standard: true, secure: true, supportsFetchAPI: true, stream: true } }]);
 
 function configPath() {
   return path.join(app.getPath('userData'), 'config.json');
@@ -48,6 +84,7 @@ function cleanSections(list, defaults) {
   const defById = new Map(defaults.map((d) => [d.id, d]));
   const out = [];
   const seen = new Set();
+  let hasBrowser = false;
   for (const raw of Array.isArray(list) ? list : []) {
     if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !/^[\w-]{1,30}$/.test(raw.id) || seen.has(raw.id)) { console.error('Skipping a section with a missing or repeated id'); continue; }
     const def = defById.get(raw.id);
@@ -56,6 +93,13 @@ function cleanSections(list, defaults) {
     if (raw.id === 'projects') { if (sec.label === 'AI Projects') sec.label = 'Explorer'; if (sec.icon === 'briefcase') sec.icon = 'folder'; }
     let type = raw.type || (raw.file ? 'local' : raw.url ? 'web' : def && def.type);
     if (type === 'disabled') { sec.type = 'disabled'; }
+    else if (type === 'drmd') { sec.type = 'drmd'; }
+    else if (type === 'browser') {
+      if (hasBrowser) { console.error('Skipping section "' + raw.id + '": only one browser tab is allowed'); continue; }
+      hasBrowser = true;
+      sec.type = 'browser';
+      try { if (typeof raw.url === 'string' && new URL(raw.url).protocol === 'https:') sec.url = raw.url; } catch { /* use the default start page */ }
+    }
     else if (type === 'local') {
       let file = typeof raw.file === 'string' ? raw.file : '';
       if (!/^renderer\/[\w-]+\.html$/.test(file) || !fs.existsSync(path.join(__dirname, file))) file = def && def.type === 'local' ? def.file : '';
@@ -67,6 +111,7 @@ function cleanSections(list, defaults) {
       if (!ok) { console.error('Skipping section "' + raw.id + '": needs an https link'); continue; }
       sec.type = 'web'; sec.url = raw.url;
     } else { console.error('Skipping section "' + raw.id + '": unknown type'); continue; }
+    if (validIconPath(raw.iconFile)) sec.iconFile = raw.iconFile;
     seen.add(raw.id);
     out.push(sec);
   }
@@ -151,20 +196,139 @@ const isBlockedName = (n) => { const l = String(n).toLowerCase(); return BLOCK_N
 // ---- Apps (launchers) ----------------------------------------------------------------------------
 // Settings: "apps": [ { "name": "Typora", "path": "D:\\Program Files\\Typora\\Typora.exe", "types": [".md"] } ].
 // Only apps listed in the settings file can be started, and the pages only ever send an app's id, never a path.
+const IMAGE_ICON_EXT = /\.(png|ico|jpe?g)$/i;
+const validIconPath = (p) => typeof p === 'string' && p.length <= 300 && path.isAbsolute(p) && (IMAGE_ICON_EXT.test(p) || /\.exe$/i.test(p));
+const MAX_APPS = 24;
+const appIdFor = (name) => 'app:' + (String(name).trim().slice(0, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app');
 function appList() {
   const raw = loadedConfig && Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
   const out = [];
   const seen = new Set();
-  for (const a of raw.slice(0, 12)) {
+  for (const a of raw.slice(0, MAX_APPS)) {
     if (!a || typeof a.name !== 'string' || !a.name.trim() || typeof a.path !== 'string' || !path.isAbsolute(a.path)) continue;
     const name = a.name.trim().slice(0, 40);
-    let id = 'app:' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app');
+    const id = appIdFor(name);
     if (seen.has(id)) continue;
     seen.add(id);
     const types = (Array.isArray(a.types) ? a.types : []).filter((t) => typeof t === 'string' && /^\.[a-z0-9]{1,8}$/i.test(t)).map((t) => t.toLowerCase()).slice(0, 20);
-    out.push({ id, name, path: a.path, types });
+    const icon = validIconPath(a.icon) ? a.icon : null;
+    out.push({ id, name, path: a.path, types, icon });
   }
   return out;
+}
+
+// Each program's own icon, read from its .exe (cached). Pages get small picture data only, never a path.
+const appIconCache = new Map();
+let genericExeIcon; // what Windows gives for a program with no icon of its own
+// Windows sometimes hands back its plain "blank window" icon for a program that does have one. When that happens,
+// read the icon straight out of the file with PowerShell (the path goes in through the environment, never into the script).
+const EXTRACT_ICON_SCRIPT = "Add-Type -AssemblyName System.Drawing; $i = [System.Drawing.Icon]::ExtractAssociatedIcon($env:TH_ICON_PATH); if ($i) { $m = New-Object IO.MemoryStream; $i.ToBitmap().Save($m, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($m.ToArray()) }";
+function extractIconWithPowerShell(p) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') { resolve(null); return; }
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', EXTRACT_ICON_SCRIPT],
+      { timeout: 10000, windowsHide: true, env: { ...process.env, TH_ICON_PATH: p }, maxBuffer: 1024 * 1024 },
+      (err, out) => { const b64 = String(out || '').trim(); resolve(!err && /^[A-Za-z0-9+/=]{100,400000}$/.test(b64) ? 'data:image/png;base64,' + b64 : null); });
+  });
+}
+async function appIcon(p) {
+  if (appIconCache.has(p)) return appIconCache.get(p);
+  let url = null;
+  try {
+    if (IMAGE_ICON_EXT.test(p)) {
+      if (fs.statSync(p).size <= 1024 * 1024) {
+        let img = nativeImage.createFromPath(p);
+        if (!img.isEmpty()) { const s = img.getSize(); if (Math.max(s.width, s.height) > 128) img = img.resize({ height: s.height >= s.width ? 128 : undefined, width: s.width > s.height ? 128 : undefined }); url = img.toDataURL(); }
+      }
+    } else {
+      const img = await app.getFileIcon(p, { size: 'large' });
+      if (img && !img.isEmpty()) url = img.toDataURL();
+      if (process.platform === 'win32') {
+        if (genericExeIcon === undefined) {
+          try { const g = await app.getFileIcon('C:\\th-no-such-folder\\none.exe', { size: 'large' }); genericExeIcon = g && !g.isEmpty() ? g.toDataURL() : null; } catch { genericExeIcon = null; }
+        }
+        if (!url || (genericExeIcon && url === genericExeIcon)) url = (await extractIconWithPowerShell(p)) || url;
+      }
+    }
+  } catch { /* a letter is shown instead */ }
+  appIconCache.set(p, url);
+  return url;
+}
+
+// Adding and removing apps rewrites the "apps" list in the settings file (a copy of the old file is kept the first time).
+function writeAppsToConfig(list) {
+  const file = configPath();
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const backup = path.join(path.dirname(file), 'config.before-apps.bak.json');
+  if (!fs.existsSync(backup)) fs.copyFileSync(file, backup);
+  cfg.apps = list;
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+  fs.renameSync(tmp, file);
+  loadedConfig.apps = list;
+}
+
+// Change one part of the settings file safely: read it fresh, keep a copy of the old file, write a temp file and rename.
+function updateConfigFile(mutator, backupName) {
+  const file = configPath();
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (backupName) {
+    const backup = path.join(path.dirname(file), backupName);
+    if (!fs.existsSync(backup)) fs.copyFileSync(file, backup);
+  }
+  mutator(cfg);
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+  fs.renameSync(tmp, file);
+  return cfg;
+}
+
+// Settings page saves keep the last ten copies of the file, newest first, in a "config-backups" folder next to it.
+function backupConfigRolling() {
+  const file = configPath();
+  const dir = path.join(path.dirname(file), 'config-backups');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+    fs.copyFileSync(file, path.join(dir, 'config-' + stamp + '.json'));
+    const all = fs.readdirSync(dir).filter((n) => /^config-[\d-]+\.json$/.test(n)).sort().reverse();
+    for (const old of all.slice(10)) fs.unlinkSync(path.join(dir, old));
+  } catch { /* a missing backup should not stop a save, but the page tells the user nothing was lost */ }
+}
+
+// ---- Home page background picture ----
+// A copy of the chosen picture lives in the app's data folder, so the original can move or be deleted.
+const BG_MAX_BYTES = 8 * 1024 * 1024;
+const BG_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' };
+function imageKind(buf) {
+  if (buf.length > 12 && buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG') return 'png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length > 12 && buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null; // anything else (including SVG, which can hold scripts) is refused
+}
+const clampDim = (n) => { const v = Number(n); return Number.isFinite(v) ? Math.max(0, Math.min(85, Math.round(v))) : 35; };
+function clearBackgroundFiles() {
+  for (const ext of Object.keys(BG_TYPES)) { try { fs.unlinkSync(path.join(app.getPath('userData'), 'home-background.' + ext)); } catch { /* not there */ } }
+}
+function homeBackground() {
+  const c = loadedConfig && loadedConfig.homeBackground;
+  if (!c || typeof c.file !== 'string' || !/^home-background\.(png|jpg|webp)$/.test(c.file)) return null;
+  try {
+    const file = path.join(app.getPath('userData'), c.file);
+    if (fs.statSync(file).size > BG_MAX_BYTES) return null;
+    const buf = fs.readFileSync(file);
+    const kind = imageKind(buf);
+    if (!kind) return null;
+    return { dataUrl: 'data:' + BG_TYPES[kind] + ';base64,' + buf.toString('base64'), dim: clampDim(c.dim) };
+  } catch { return null; }
+}
+function notifyHomeBackground() {
+  const v = views.get('home');
+  if (v && !v.webContents.isDestroyed()) v.webContents.send('home:bg');
+}
+function saveBackgroundSetting(value) {
+  updateConfigFile((cfg) => { if (value) cfg.homeBackground = value; else delete cfg.homeBackground; });
+  if (value) loadedConfig.homeBackground = value; else delete loadedConfig.homeBackground;
 }
 
 function startApp(id, fileArg) {
@@ -397,6 +561,55 @@ function isInternal(url) {
   }
 }
 
+function hostOf(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } }
+function isVaultUrl(url) { return VAULT_HOSTS.test(hostOf(url)); }
+
+// Extra sites a tab may move to, from the optional "allowedHosts" list in the settings file (for example a company sign-in provider).
+function extraHostAllowed(url) {
+  const host = hostOf(url);
+  const list = loadedConfig && Array.isArray(loadedConfig.allowedHosts) ? loadedConfig.allowedHosts : [];
+  return !!host && list.some((h) => typeof h === 'string' && /^[a-z0-9.-]+$/i.test(h) && (host === h.toLowerCase() || host.endsWith('.' + h.toLowerCase())));
+}
+
+// A web tab stays on its own site (and the Microsoft/Claude/DOMO sign-in sites). Anything else opens in the Browser tab.
+function allowedForSection(section, url) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol === 'file:') return false;
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+  if (isVaultUrl(section.url)) return isVaultUrl(url);        // the vault never leaves its own site
+  const own = hostOf(section.url).replace(/^www\./, '');
+  const host = u.hostname.toLowerCase();
+  return isInternal(url) || (!!own && (host === own || host === 'www.' + own || host.endsWith('.' + own))) || extraHostAllowed(url);
+}
+
+function openInBrowserTab(url) {
+  if (!/^https?:/i.test(url)) return;
+  const sec = sections.find((x) => x.type === 'browser');
+  if (sec) select(sec.id); // also creates the Browser tab the first time
+  if (sec && browserService) browserService.newTab(url); else shell.openExternal(url);
+}
+
+// Sign-in cookies that have no end date normally vanish when the app closes. For the sites listed in "keepSignedIn"
+// (DOMO by default) they are given an end date, so you stay signed in between restarts.
+function keepSignedIn(ses, hosts) {
+  const wanted = (hosts || []).filter((h) => typeof h === 'string' && /^[a-z0-9.-]+$/i.test(h)).map((h) => h.toLowerCase());
+  if (!wanted.length) return;
+  ses.cookies.on('changed', (_e, cookie, _cause, removed) => {
+    if (removed || !cookie.session) return;
+    const dom = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
+    if (!wanted.some((h) => dom === h || dom.endsWith('.' + h))) return;
+    const details = {
+      url: (cookie.secure ? 'https://' : 'http://') + dom + (cookie.path || '/'),
+      name: cookie.name, value: cookie.value, path: cookie.path || '/', secure: !!cookie.secure, httpOnly: !!cookie.httpOnly,
+      expirationDate: Math.floor(Date.now() / 1000) + KEEP_SIGNED_IN_DAYS * 86400,
+    };
+    if (!cookie.hostOnly) details.domain = cookie.domain;
+    if (cookie.sameSite && cookie.sameSite !== 'unspecified') details.sameSite = cookie.sameSite;
+    ses.cookies.set(details).catch(() => { /* the cookie simply stays a session cookie */ });
+  });
+}
+
 function stageBounds() {
   const [w, h] = win.getContentSize();
   const left = RAIL_W + (ui.get().feedOpen ? FEED_W : 0) + GAP;
@@ -409,9 +622,59 @@ function paletteBounds() {
   return { x: Math.round((w - width) / 2), y: PALETTE_TOP, width, height: paletteH };
 }
 
+function isBrowserSection(id) { const sec = sections.find((x) => x.id === id); return !!(sec && sec.type === 'browser' && browserService); }
+
+// ---- Screen lock (see lock.js) ----
+let lockSvc = null;
+let lockView = null;
+let locked = false;
+function lockService() { return lockSvc || (lockSvc = createLock({ file: path.join(app.getPath('userData'), 'lock.json') })); }
+function fromLock(e) { return !!(locked && lockView && e.sender === lockView.webContents); }
+function raiseLock() {
+  if (!locked || !lockView || !win || win.isDestroyed()) return;
+  const [w, h] = win.getContentSize();
+  win.contentView.addChildView(lockView); // adding it again moves it to the front
+  lockView.setBounds({ x: 0, y: 0, width: w, height: h });
+}
+function lockNow() {
+  if (locked || !win || win.isDestroyed() || !lockService().active()) return false;
+  closePalette(false);
+  lockView = new WebContentsView({
+    webPreferences: { preload: path.join(__dirname, 'preload-lock.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  lockView.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f1319' : '#e5eaf1');
+  const wc = lockView.webContents;
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  wc.on('will-navigate', (event) => event.preventDefault());
+  wc.loadFile(path.join(__dirname, 'renderer', 'lock.html'));
+  locked = true;
+  raiseLock();
+  wc.focus();
+  return true;
+}
+function unlockNow() {
+  if (!locked) return;
+  locked = false;
+  if (lockView) {
+    try { win.contentView.removeChildView(lockView); } catch { /* window already closing */ }
+    if (!lockView.webContents.isDestroyed()) lockView.webContents.close();
+    lockView = null;
+  }
+  const v = currentId && views.get(currentId);
+  if (currentId && isBrowserSection(currentId)) browserService.focusContent();
+  else if (v) v.webContents.focus();
+}
+function idleCheck(idleSeconds) {
+  if (locked || !lockService().active()) return false;
+  const idle = idleSeconds == null ? powerMonitor.getSystemIdleTime() : idleSeconds;
+  if (idle >= lockService().minutes() * 60) return lockNow();
+  return false;
+}
+
 function layout() {
   if (!win) return;
-  if (currentId && views.has(currentId)) views.get(currentId).setBounds(stageBounds());
+  if (locked) raiseLock();
+  if (currentId && views.has(currentId)) { views.get(currentId).setBounds(stageBounds()); if (isBrowserSection(currentId)) browserService.layout(); }
   if (paletteOpen && paletteView) paletteView.setBounds(paletteBounds());
 }
 
@@ -419,11 +682,36 @@ function rounded(view) {
   if (typeof view.setBorderRadius === 'function') view.setBorderRadius(RADIUS);
 }
 
+function createBrowserView(section) {
+  const view = new WebContentsView({
+    webPreferences: { preload: path.join(__dirname, 'preload-browser.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  rounded(view);
+  const wc = view.webContents;
+  browserShellIds.add(wc.id); // the toolbar page may drive the tabs; it is not a "local" page and gets no data bridge
+  wc.once('destroyed', () => browserShellIds.delete(wc.id));
+  wc.loadFile(path.join(__dirname, 'renderer', 'browser.html'));
+  wc.on('will-navigate', (event) => event.preventDefault()); // the toolbar page never navigates
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  browserService = createBrowser({
+    shellView: view, WebContentsView, Menu, shell,
+    attachView: (v) => { rounded(v); win.contentView.addChildView(v); if (paletteOpen && paletteView) win.contentView.addChildView(paletteView); },
+    detachView: (v) => { try { win.contentView.removeChildView(v); } catch { /* already gone */ } },
+    stageBounds,
+    session: session.fromPartition(BROWSER_PARTITION), partition: BROWSER_PARTITION,
+    userAgent: chromeUserAgent(),
+    historyFile: path.join(app.getPath('userData'), 'browser-history.json'),
+    startUrl: section.url,
+  });
+  return view;
+}
+
 function createView(section) {
+  if (section.type === 'browser') return createBrowserView(section);
   const view = new WebContentsView({
     webPreferences: {
-      partition: section.type === 'web' ? PARTITION : undefined,
-      preload: section.type === 'local' ? path.join(__dirname, 'preload-local.js') : undefined,
+      partition: section.type === 'web' ? (isVaultUrl(section.url) ? VAULT_PARTITION : PARTITION) : section.type === 'drmd' ? DRMD_PARTITION : undefined,
+      preload: section.type === 'local' ? path.join(__dirname, 'preload-local.js') : section.type === 'drmd' ? path.join(__dirname, 'preload-drmd.js') : undefined,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -434,6 +722,23 @@ function createView(section) {
   if (section.type === 'local') {
     localContentsIds.add(wc.id);
     wc.once('destroyed', () => localContentsIds.delete(wc.id));
+  }
+
+  if (section.type === 'drmd') {
+    drmdContentsIds.add(wc.id);
+    wc.once('destroyed', () => drmdContentsIds.delete(wc.id));
+    if (fs.existsSync(path.join(DRMD_DIR, '_shell.html'))) wc.loadURL(DRMD_URL);
+    else wc.loadFile(path.join(__dirname, 'renderer', 'drmd-missing.html'));
+    wc.setWindowOpenHandler(({ url }) => {
+      if (/^(https?:|mailto:)/i.test(url)) shell.openExternal(url);
+      return { action: 'deny' };
+    });
+    wc.on('will-navigate', (event, url) => {
+      if (url.startsWith(DRMD_URL)) return;
+      event.preventDefault();
+      if (/^(https?:|mailto:)/i.test(url)) shell.openExternal(url);
+    });
+    return view;
   }
 
   if (section.type === 'web') {
@@ -459,6 +764,15 @@ function createView(section) {
     return { action: 'deny' };
   });
 
+  if (section.type === 'web') {
+    const guard = (event, url) => {
+      if (allowedForSection(section, url)) return;
+      event.preventDefault();
+      openInBrowserTab(url);
+    };
+    wc.on('will-navigate', guard);
+    if (isVaultUrl(section.url)) wc.on('will-redirect', guard);
+  }
   wc.on('will-navigate', (event, url) => {
     if (section.type === 'local' && !url.startsWith('file:')) {
       event.preventDefault();
@@ -469,7 +783,15 @@ function createView(section) {
   return view;
 }
 
-function enabledSections() { return sections.filter((x) => x.type !== 'disabled'); }
+// Alt+Q: back to the tab you were on before this one. Pressing it again comes back.
+function goBackSection() {
+  const target = previousId && sections.find((x) => x.id === previousId && x.type !== 'disabled');
+  if (!target || target.id === currentId) return false;
+  select(target.id);
+  return true;
+}
+
+function enabledSections() { return sections.filter((x) => x.type !== 'disabled' && x.id !== 'settings'); }
 
 function deliverParams(view, params) {
   const wc = view.webContents;
@@ -482,6 +804,7 @@ function select(id, params) {
   if (!section || section.type === 'disabled' || !win) return;
 
   if (currentId && currentId !== id && views.has(currentId)) {
+    if (isBrowserSection(currentId)) browserService.detach();
     win.contentView.removeChildView(views.get(currentId));
   }
   if (!views.has(id)) views.set(id, createView(section));
@@ -489,11 +812,14 @@ function select(id, params) {
   const view = views.get(id);
   win.contentView.addChildView(view);
   view.setBounds(stageBounds());
+  if (section.type === 'browser') browserService.attach();
   if (paletteOpen && paletteView) win.contentView.addChildView(paletteView); // keep the palette on top
+  if (locked) raiseLock();
+  if (currentId && currentId !== id) previousId = currentId;
   currentId = id;
   win.webContents.send('cc:selected', id);
   if (params) deliverParams(view, params);
-  if (!paletteOpen) view.webContents.focus();
+  if (!paletteOpen) { if (section.type === 'browser') browserService.focusContent(); else view.webContents.focus(); }
 }
 
 // ---- theme and logo ----
@@ -558,14 +884,16 @@ function closePalette(restoreFocus) {
 }
 
 function reloadCurrent() {
+  if (currentId && isBrowserSection(currentId)) { browserService.reload(); return; }
   const v = currentId && views.get(currentId);
   if (v) v.webContents.reload();
 }
 
 function isWebContents(contents) {
+  if (browserShellIds.has(contents.id) || (browserService && browserService.owns(contents))) return true; // the Browser tab follows the web-site key rules
   for (const [id, view] of views) {
     const sec = sections.find((x) => x.id === id);
-    if (sec && sec.type === 'web' && view.webContents === contents) return true;
+    if (sec && (sec.type === 'web' || sec.type === 'drmd') && view.webContents === contents) return true;
   }
   return false;
 }
@@ -580,6 +908,21 @@ function handleKey(contents, input) {
   const ctrlOnly = input.control && !input.alt && !input.shift && !input.meta;
   const ctrlShift = input.control && input.shift && !input.alt && !input.meta;
   const altOnly = input.alt && !input.control && !input.shift && !input.meta;
+
+  // Browser tab: the usual browser keys, only while its toolbar or one of its pages has the focus
+  if (currentId && isBrowserSection(currentId) && web) {
+    const shellWc = views.get(currentId).webContents;
+    if (ctrlOnly && key === 't') { browserService.newTab(); shellWc.send('browser:focus-address'); shellWc.focus(); return true; }
+    if (ctrlOnly && key === 'w') { browserService.closeTab(browserService.state().activeId); return true; }
+    if ((ctrlOnly && key === 'l') || (altOnly && key === 'd')) { shellWc.focus(); shellWc.send('browser:focus-address'); return true; }
+    if (altOnly && key === 'arrowleft') { browserService.back(); return true; }
+    if (altOnly && key === 'arrowright') { browserService.forward(); return true; }
+    if (ctrlOnly && key === 'r') { browserService.reload(); return true; }
+    if (input.control && !input.alt && !input.meta && key === 'tab') { browserService.cycle(input.shift ? -1 : 1); return true; }
+  }
+
+  if (key === 'q' && altOnly) { goBackSection(); return true; } // back to the previous tab
+  if (key === 'l' && ctrlShift) { lockNow(); return true; } // lock the screen (only when a PIN is set up in Settings)
 
   if (key === 'f5' && !input.control && !input.alt) { reloadCurrent(); return true; }
 
@@ -604,7 +947,7 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'transformHub ' + app.getVersion(),
+    title: 'Transform Workstation ' + app.getVersion(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1319' : '#e5eaf1',
     icon: windowIconPath() || undefined,
     autoHideMenuBar: true,
@@ -617,26 +960,55 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null);
 
+  // Windows: tell the taskbar which icon and which start command belong to this window, so a pinned button
+  // keeps the Transform Workstation icon instead of falling back to electron.exe's.
+  if (process.platform === 'win32') {
+    const ico = firstExisting(['thumbnail.ico', 'transformHub.ico']);
+    if (ico) {
+      try {
+        win.setAppDetails({
+          appId: 'au.com.transformhomes.transformhub',
+          appIconPath: ico, appIconIndex: 0,
+          relaunchCommand: '"' + process.execPath + '" "' + app.getAppPath() + '"',
+          relaunchDisplayName: 'Transform Workstation',
+        });
+      } catch (err) { console.error('Could not set the taskbar details:', err.message); }
+    }
+  }
+
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   localContentsIds.add(win.webContents.id);
   win.on('page-title-updated', (e) => e.preventDefault()); // keep the version in the title
   win.on('resize', layout);
+  win.on('focus', () => { if (locked && lockView && !lockView.webContents.isDestroyed()) lockView.webContents.focus(); });
 
   win.webContents.once('did-finish-load', () => {
     const cfg = loadedConfig;
     const start = sections.find((s) => s.id === (process.env.CC_TEST_SECTION || cfg.startSection) && s.type !== 'disabled')
       || sections.find((s) => s.type !== 'disabled');
     if (start) select(start.id);
+    if (!process.env.CC_TEST_SCRIPT) lockNow(); // a PIN, once set up, is also asked for at start-up
 
     if (process.env.CC_TEST_SCRIPT) {
       // Test hook only (never set in normal use): run a script that can drive the app.
       const ctx = {
-        select, views, store, sections, win, app, feeds: feedService, config: loadedConfig,
+        select, goBackSection, previous: () => previousId, views, store, sections, win, app, feeds: feedService, config: loadedConfig,
         ui, handleKey, todo: () => todoService, cacheFavicon, favicons: () => favicons, openPalette, closePalette, toggleFeed, stageBounds, paletteBounds,
         palette: () => ({ view: paletteView, open: paletteOpen }),
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         current: () => currentId,
+        browser: () => browserService,
+        nav: { allowedForSection, openInBrowserTab },
+        lock: { service: lockService, now: lockNow, isLocked: () => locked, idleCheck, view: () => lockView },
+        setPickFolder: (fn) => { testPickFolder = fn; },
+        setPickImage: (fn) => { testPickImage = fn; },
+        setRecent: (run) => { recentSvc = createRecent({ run, ttl: 0 }); },
+        setFileSearch: (run) => { fileSearch = createFileSearch({ run }); },
+        setPickApp: (fn) => { testPickApp = fn; },
+        setSpawn: (fn) => { spawnShell = fn; },
+        setOutlookRun: (fn) => { outlookRun = fn; outlookService = null; },
+        setDialogs: (d) => { testDialogs = d; },
       };
       Promise.resolve(require(process.env.CC_TEST_SCRIPT)(ctx))
         .catch((err) => { console.error('TEST SCRIPT FAILED:', err); process.exitCode = 1; })
@@ -659,7 +1031,132 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // Serve the built Dr. MD page at drmd://app/ (only files inside the drmd folder; any other path gets the app shell).
+    session.fromPartition(DRMD_PARTITION).protocol.handle('drmd', async (request) => {
+      const withCsp = (res) => {
+        const headers = new Headers(res.headers);
+        headers.set('Content-Security-Policy', DRMD_CSP);
+        return new Response(res.body, { status: res.status, headers });
+      };
+      try {
+        const u = new URL(request.url);
+        if (u.hostname !== 'app') return new Response('Not found', { status: 404 });
+        const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '');
+        let file = path.resolve(DRMD_DIR, rel || '_shell.html');
+        const inside = (f) => f === DRMD_DIR || f.startsWith(DRMD_DIR + path.sep);
+        if (!inside(file)) return new Response('Not found', { status: 404 });
+        if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+          if (path.extname(rel)) return new Response('Not found', { status: 404 });
+          file = path.join(DRMD_DIR, '_shell.html'); // a page route: let the app handle it
+        }
+        return withCsp(await net.fetch(pathToFileURL(file).href));
+      } catch {
+        return new Response('Not found', { status: 404 });
+      }
+    });
+
+    drmdService = createDrmd({
+      stateFile: path.join(app.getPath('userData'), 'drmd-recents.json'),
+      backupDir: path.join(app.getPath('userData'), 'drmd-backups'),
+      showOpen: async () => {
+        if (testDialogs) return testDialogs.open();
+        const r = await dialog.showOpenDialog(win, { title: 'Open a Markdown file', properties: ['openFile'], filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }] });
+        return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+      },
+      showSave: async (suggested) => {
+        if (testDialogs) return testDialogs.save(suggested);
+        const r = await dialog.showSaveDialog(win, { title: 'Save note', defaultPath: path.join(app.getPath('documents'), suggested), filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }] });
+        return r.canceled || !r.filePath ? null : r.filePath;
+      },
+    });
+    const fromDrmd = (e) => drmdContentsIds.has(e.sender.id) && e.senderFrame && String(e.senderFrame.url).startsWith(DRMD_URL);
+    const idOk = (id) => typeof id === 'string' && id.length > 0 && id.length <= 64;
+    const NOPE = { ok: false, error: 'Not allowed.' };
+    ipcMain.handle('drmd:open', (e) => (fromDrmd(e) ? drmdService.open() : NOPE));
+    ipcMain.handle('drmd:open-recent', (e, id) => (fromDrmd(e) && idOk(id) ? drmdService.openRecent(id) : NOPE));
+    ipcMain.handle('drmd:reload', (e, id) => (fromDrmd(e) && idOk(id) ? drmdService.reload(id) : NOPE));
+    ipcMain.handle('drmd:recents', (e) => (fromDrmd(e) ? drmdService.recents() : []));
+    ipcMain.handle('drmd:forget', (e, id) => (fromDrmd(e) && idOk(id) ? drmdService.forget(id) : []));
+    ipcMain.handle('drmd:save', (e, id, text, mtime) => (fromDrmd(e) && idOk(id) && typeof text === 'string' && Number.isFinite(mtime) ? drmdService.save(id, text, mtime) : NOPE));
+    ipcMain.handle('drmd:save-as', (e, name, text) => (fromDrmd(e) && typeof text === 'string' && (name === undefined || typeof name === 'string') ? drmdService.saveAs(name, text) : NOPE));
+    ipcMain.handle('cc:reorder-sections', (e, ids) => {
+      if (!isLocalSender(e) || !Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) return { ok: false, error: 'Not allowed.' };
+      const shown = sections.filter((x) => x.id !== 'settings');
+      if (new Set(ids).size !== ids.length || ids.length !== shown.length || !shown.every((x) => ids.includes(x.id))) return { ok: false, error: 'That order does not match your tabs.' };
+      const byId = new Map(sections.map((x) => [x.id, x]));
+      const next = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id === 'settings')];
+      try {
+        updateConfigFile((cfg) => {
+          const rank = new Map(next.map((x, i) => [x.id, i]));
+          const file = Array.isArray(cfg.sections) ? cfg.sections : [];
+          cfg.sections = file.slice().sort((a, b) => (rank.has(a && a.id) ? rank.get(a.id) : 999) - (rank.has(b && b.id) ? rank.get(b.id) : 999));
+        }, 'config.before-reorder.bak.json');
+      } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      sections = next;
+      loadedConfig.sections = next;
+      return { ok: true };
+    });
+    // ---- Settings page ----
+    const readConfigFile = () => JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+    const sectionsSig = (list) => JSON.stringify(list.filter((s) => s.id !== 'settings').map((s) => [s.id, s.label, s.icon, s.type, s.url || '', s.file || '', s.iconFile || '']));
+    const defaultSections = () => JSON.parse(fs.readFileSync(path.join(__dirname, 'config.default.json'), 'utf8')).sections;
+    ipcMain.handle('settings:get', (e) => {
+      if (!isLocalSender(e)) return null;
+      let raw = '';
+      try { raw = fs.readFileSync(configPath(), 'utf8'); } catch { /* shown as empty */ }
+      const c = loadedConfig;
+      let fileSections = sections;
+      try { fileSections = cleanSections(JSON.parse(raw).sections, defaultSections()); } catch { /* show the running tabs */ }
+      return {
+        userName: String(c.userName || ''),
+        spellCheckLanguage: (Array.isArray(c.spellCheckLanguages) && c.spellCheckLanguages[0]) || 'en-AU',
+        outlookDesktop: c.outlookDesktop !== false,
+        startSection: c.startSection || 'home',
+        calendarFeeds: validFeeds(c.calendarFeeds),
+        projects: (c.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') })),
+        restartPending: sectionsSig(fileSections) !== sectionsSig(sections),
+        sections: fileSections.filter((s) => s.id !== 'settings').map((s) => ({ id: s.id, label: s.label, icon: s.icon, type: s.type, url: s.url || '', hidden: s.type === 'disabled', canRemove: s.type === 'web', canHide: s.type !== 'web' && s.id !== 'home' })),
+        raw, version: app.getVersion(), file: configPath(), platform: process.platform,
+      };
+    });
+    ipcMain.handle('settings:save', (e, patch) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      let cur;
+      try { cur = readConfigFile(); } catch { return { ok: false, error: 'Your settings file could not be read, so nothing was changed.' }; }
+      const defs = defaultSections();
+      const r = buildSettings(patch, { current: cur, sections: cleanSections(cur.sections, defs), live: sections, defaults: defs, cleanSections, validFeeds });
+      if (!r.ok) return r;
+      backupConfigRolling();
+      try { updateConfigFile((cfg) => { Object.assign(cfg, r.config); }); } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      const { sections: _newTabs, ...liveChanges } = r.config; // the running tabs are replaced after a restart
+      Object.assign(loadedConfig, liveChanges);
+      for (const ses of [session.defaultSession, session.fromPartition(PARTITION), session.fromPartition(DRMD_PARTITION), session.fromPartition(BROWSER_PARTITION)]) setupSpellcheck(ses, loadedConfig.spellCheckLanguages || ['en-AU']);
+      if (outlookService) outlookService = null;
+      if (feedService && r.feedsChanged) feedService.refresh();
+      return { ok: true, restartNeeded: r.restartNeeded };
+    });
+    ipcMain.handle('settings:save-raw', (e, text) => {
+      if (!isLocalSender(e) || typeof text !== 'string' || text.length > 500000) return { ok: false, error: 'Not allowed.' };
+      const err = rawSettingsError(text, { configVersion: CONFIG_VERSION, cleanSections, defaults: defaultSections() });
+      if (err) return { ok: false, error: err };
+      backupConfigRolling();
+      try {
+        const tmp = configPath() + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(JSON.parse(text), null, 2));
+        fs.renameSync(tmp, configPath());
+      } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      return { ok: true, restartNeeded: true };
+    });
+    ipcMain.handle('settings:pick-folder', async (e) => {
+      if (!isLocalSender(e)) return null;
+      if (testPickFolder) return testPickFolder();
+      const r = await dialog.showOpenDialog(win, { title: 'Choose a folder', properties: ['openDirectory'] });
+      return r.canceled ? null : r.filePaths[0];
+    });
+    ipcMain.handle('settings:restore-defaults-info', (e) => (isLocalSender(e) ? { backups: (() => { try { return fs.readdirSync(path.join(path.dirname(configPath()), 'config-backups')).filter((n) => /^config-[\d-]+\.json$/.test(n)).sort().reverse().slice(0, 10); } catch { return []; } })() } : null));
+    ipcMain.on('app:restart', (e) => { if (isLocalSender(e) && !process.env.CC_TEST_SCRIPT) { app.relaunch(); app.exit(0); } });
     ipcMain.handle('cc:sections', (e) => (isLocalSender(e) ? sections.map((x) => ({ id: x.id, label: x.label, icon: x.icon, type: x.type })) : []));
+    ipcMain.on('cc:back', (e) => { if (isLocalSender(e)) goBackSection(); });
     ipcMain.on('cc:select', (e, id) => { if (isLocalSender(e) && typeof id === 'string') select(id); });
     ipcMain.on('cc:navigate', (e, p) => {
       if (!isLocalSender(e) || !p || typeof p.section !== 'string') return;
@@ -691,6 +1188,55 @@ if (!app.requestSingleInstanceLock()) {
       ui.set({ favs: next });
       if (win && !win.isDestroyed()) win.webContents.send('ui:changed', ui.get());
       return { ok: true, pinned: !has, favs: ui.get().favs };
+    });
+    ipcMain.handle('app:icons', async (e) => {
+      if (!isLocalSender(e)) return {};
+      const out = {};
+      for (const a of appList()) { const u = await appIcon(a.icon || a.path); if (u) out[a.id] = u; }
+      return out;
+    });
+    ipcMain.handle('app:add', async (e) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const raw = Array.isArray(loadedConfig.apps) ? loadedConfig.apps.slice() : [];
+      if (raw.length >= MAX_APPS) return { ok: false, error: 'You can have up to ' + MAX_APPS + ' apps.' };
+      let picked;
+      if (testPickApp) picked = await testPickApp();
+      else {
+        const r = await dialog.showOpenDialog(win, { title: 'Choose a program to add', properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe'] }], defaultPath: process.env.ProgramFiles || undefined });
+        picked = r.canceled ? null : r.filePaths[0];
+      }
+      if (!picked) return { ok: true, cancelled: true };
+      if (typeof picked !== 'string' || !path.isAbsolute(picked) || (process.platform === 'win32' && !/\.exe$/i.test(picked))) return { ok: false, error: 'Please choose a program (.exe file).' };
+      try { if (!fs.statSync(picked).isFile()) throw new Error('x'); } catch { return { ok: false, error: 'That file was not found.' }; }
+      if (raw.some((a) => a && typeof a.path === 'string' && a.path.toLowerCase() === picked.toLowerCase())) return { ok: false, error: 'That program is already in your list.' };
+      let name = path.basename(picked).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim().slice(0, 40) || 'App';
+      name = name.charAt(0).toUpperCase() + name.slice(1);
+      if (/^explorer\.exe$/i.test(path.basename(picked))) name = 'File Explorer';
+      const taken = new Set(raw.map((a) => a && typeof a.name === 'string' ? appIdFor(a.name) : ''));
+      let candidate = name, n = 2;
+      while (taken.has(appIdFor(candidate))) candidate = name.slice(0, 36) + ' ' + n++;
+      try { writeAppsToConfig([...raw, { name: candidate, path: picked, types: [] }]); } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      return { ok: true, name: candidate };
+    });
+    ipcMain.handle('app:remove', (e, id) => {
+      if (!isLocalSender(e) || typeof id !== 'string') return { ok: false, error: 'Not allowed.' };
+      const raw = Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
+      const next = raw.filter((a) => !(a && typeof a.name === 'string' && appIdFor(a.name) === id));
+      if (next.length === raw.length) return { ok: false, error: 'Unknown app.' };
+      try { writeAppsToConfig(next); } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      return { ok: true };
+    });
+    ipcMain.handle('app:reorder', (e, ids) => {
+      if (!isLocalSender(e) || !Array.isArray(ids) || ids.length > MAX_APPS || !ids.every((x) => typeof x === 'string')) return { ok: false, error: 'Not allowed.' };
+      const raw = Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
+      const idOf = (a) => (a && typeof a.name === 'string' ? appIdFor(a.name) : null);
+      const byId = new Map();
+      for (const a of raw) { const id = idOf(a); if (id && !byId.has(id)) byId.set(id, a); }
+      if (new Set(ids).size !== ids.length || !ids.every((x) => byId.has(x))) return { ok: false, error: 'That order does not match your apps.' };
+      const picked = new Set(ids.map((x) => byId.get(x)));
+      const next = [...ids.map((x) => byId.get(x)), ...raw.filter((a) => !picked.has(a))]; // entries that are not shown stay at the end
+      try { updateConfigFile((cfg) => { cfg.apps = next; }, 'config.before-reorder.bak.json'); loadedConfig.apps = next; } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      return { ok: true };
     });
     ipcMain.handle('app:launch', (e, id) => (isLocalSender(e) && typeof id === 'string' ? startApp(id, null) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('app:open-with', (e, id, root, rel) => {
@@ -724,8 +1270,61 @@ if (!app.requestSingleInstanceLock()) {
       shell.showItemInFolder(r.real);
       return { ok: true };
     });
+    // Right-click menu in the Explorer: PowerShell here, copy path, properties. All paths go through resolveInProject.
+    ipcMain.handle('fs:powershell', (e, id, rel) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const r = resolveInProject(id, rel);
+      if (r.error) return { ok: false, error: r.error };
+      let dir;
+      try { dir = fs.statSync(r.real).isDirectory() ? r.real : path.dirname(r.real); } catch { return { ok: false, error: 'Not found.' }; }
+      if (process.platform !== 'win32' && !spawnShell) return { ok: false, error: 'PowerShell is only available on Windows.' };
+      try {
+        // fixed arguments only; the folder is passed as the working directory, never as part of a command
+        const child = (spawnShell || require('child_process').spawn)('cmd.exe', ['/c', 'start', '', 'powershell.exe', '-NoExit'], { cwd: dir, detached: true, stdio: 'ignore' });
+        child.on('error', () => { /* nothing more to do */ });
+        child.unref();
+        return { ok: true };
+      } catch { return { ok: false, error: 'Could not start PowerShell.' }; }
+    });
+    ipcMain.handle('fs:copy-path', async (e, id, rel) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const r = resolveInProject(id, rel);
+      if (r.error) return { ok: false, error: r.error };
+      try { await clipboard.writeText(r.real); } catch { return { ok: false, error: 'Could not copy to the clipboard.' }; } // newer Electron versions copy asynchronously
+      return { ok: true, path: r.real };
+    });
+    ipcMain.handle('fs:properties', (e, id, rel) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const r = resolveInProject(id, rel);
+      if (r.error) return { ok: false, error: r.error };
+      let st;
+      try { st = fs.statSync(r.real); } catch { return { ok: false, error: 'Not found.' }; }
+      const out = { ok: true, name: path.basename(r.real) || r.real, kind: st.isDirectory() ? 'folder' : 'file', path: r.real,
+        created: st.birthtimeMs, modified: st.mtimeMs, accessed: st.atimeMs, readOnly: (st.mode & 0o200) === 0 };
+      if (st.isDirectory()) {
+        try { const names = fs.readdirSync(r.real); out.items = names.length; } catch { out.items = null; }
+      } else { out.size = st.size; out.type = path.extname(r.real).slice(1).toUpperCase() || ''; }
+      return out;
+    });
     ipcMain.on('cc:reload', (e) => { if (isLocalSender(e)) reloadCurrent(); });
-    ipcMain.on('cc:open-config', (e) => { if (isLocalSender(e)) shell.openPath(configPath()); });
+    // Opens the settings file for editing. Notepad is used on Windows because a .json file often has no program assigned to it.
+    async function openSettingsFile() {
+      const file = configPath();
+      if (process.platform === 'win32') {
+        try {
+          const child = require('child_process').spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
+          child.on('error', () => { /* the fallback below is tried when Notepad cannot start */ });
+          child.unref();
+          return { ok: true };
+        } catch { /* fall through */ }
+      }
+      const err = await shell.openPath(file);
+      if (!err) return { ok: true };
+      shell.showItemInFolder(file);
+      return { ok: false, error: 'No program could open the file, so its folder was shown instead.' };
+    }
+    ipcMain.on('cc:open-config', (e) => { if (isLocalSender(e)) openSettingsFile(); });
+    ipcMain.handle('settings:open-file', (e) => (isLocalSender(e) ? openSettingsFile() : { ok: false, error: 'Not allowed.' }));
     ipcMain.on('ui:set-theme', (e, t) => { if (isLocalSender(e) && ['light', 'dark', 'system'].includes(t)) { ui.set({ theme: t }); applyTheme(); } });
     ipcMain.handle('app:logo', (e) => (isLocalSender(e) ? readLogo() : null));
     ipcMain.handle('ui:get', (e) => (isLocalSender(e) ? ui.get() : null));
@@ -740,6 +1339,10 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('palette:recent', (e, key) => { if (isLocalSender(e)) ui.pushRecent(key); });
 
     loadedConfig = loadConfig();
+    // Spell check: Australian English unless "spellCheckLanguages" in the settings says otherwise, in every storage area the app uses
+    for (const ses of [session.defaultSession, session.fromPartition(PARTITION), session.fromPartition(DRMD_PARTITION), session.fromPartition(BROWSER_PARTITION)]) {
+      setupSpellcheck(ses, loadedConfig.spellCheckLanguages || ['en-AU']);
+    }
     sections = loadedConfig.sections;
     store = createStore(dataDir());
     ui = createUiState(dataDir());
@@ -759,9 +1362,28 @@ if (!app.requestSingleInstanceLock()) {
       setTimeout(() => feedService.refresh(), 2500);
       setInterval(() => feedService.refresh(), 15 * 60 * 1000);
     }
+    // Classic Outlook on this PC: unread count and appointments. Settings: "outlookDesktop": false turns it off.
+    const defaultOutlookRun = (script) => new Promise((resolve, reject) => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        { timeout: 25000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    });
+    ipcMain.handle('outlook:get', (e, force) => {
+      if (!isLocalSender(e)) return { state: 'off' };
+      const on = loadedConfig.outlookDesktop !== false && (outlookRun || process.platform === 'win32');
+      if (!on) return { state: 'off' };
+      if (!outlookService) outlookService = createOutlook({ run: outlookRun || defaultOutlookRun });
+      return outlookService.get(force === true);
+    });
     ipcMain.handle('feeds:get', (e) => (isLocalSender(e) ? feedService.get() : null));
     ipcMain.handle('feeds:refresh', (e) => (isLocalSender(e) ? feedService.refresh() : null));
 
+    // Left-rail pictures for sections that name an "iconFile" (a program's .exe, or a .png/.ico picture)
+    ipcMain.handle('app:section-icons', async (e) => {
+      if (!isLocalSender(e)) return {};
+      const out = {};
+      for (const s of sections) { if (s.iconFile) { const u = await appIcon(s.iconFile); if (u) out[s.id] = u; } }
+      return out;
+    });
     loadFavicons();
     ipcMain.handle('app:favicons', (e) => (isLocalSender(e) ? favicons : {}));
     todoService = createTodoSync({ scrape: scrapeTodo, cacheFile: path.join(dataDir(), 'todo-cache.json'), onChange: broadcastTodo });
@@ -799,13 +1421,166 @@ if (!app.requestSingleInstanceLock()) {
       shell.openExternal(url);
       return { ok: true };
     });
+    // Browser tab: only its own toolbar page may drive the tabs
+    const fromBrowserShell = (e) => !!(browserService && browserShellIds.has(e.sender.id));
+    ipcMain.handle('browser:state', (e) => (fromBrowserShell(e) ? browserService.state() : null));
+    ipcMain.handle('browser:new-tab', (e) => (fromBrowserShell(e) ? browserService.newTab() : null));
+    ipcMain.handle('browser:close-tab', (e, id) => (fromBrowserShell(e) && Number.isInteger(id) ? browserService.closeTab(id) : false));
+    ipcMain.handle('browser:select-tab', (e, id) => (fromBrowserShell(e) && Number.isInteger(id) ? browserService.select(id) : false));
+    ipcMain.handle('browser:go', (e, input) => (fromBrowserShell(e) && typeof input === 'string' ? browserService.go(input) : false));
+    ipcMain.handle('browser:back', (e) => { if (fromBrowserShell(e)) browserService.back(); });
+    ipcMain.handle('browser:forward', (e) => { if (fromBrowserShell(e)) browserService.forward(); });
+    ipcMain.handle('browser:reload', (e) => { if (fromBrowserShell(e)) browserService.reload(); });
+    ipcMain.handle('browser:stop', (e) => { if (fromBrowserShell(e)) browserService.stop(); });
+    ipcMain.handle('browser:suggest', (e, q) => (fromBrowserShell(e) && typeof q === 'string' ? browserService.suggest(q) : []));
+    ipcMain.handle('browser:clear', async (e) => (fromBrowserShell(e) ? browserService.clearData() : false));
+    // ---- Screen lock ----
+    ipcMain.handle('lock:state', (e) => (fromLock(e) ? { wait: lockService().waitSeconds() } : null));
+    ipcMain.handle('lock:unlock', (e, pin) => {
+      if (!fromLock(e) || typeof pin !== 'string' || pin.length > MAX_PIN) return { ok: false, wait: 0 };
+      const r = lockService().verify(pin);
+      if (r.ok) setTimeout(unlockNow, 60); // a moment later, so the reply reaches the lock page before it is closed
+      return { ok: r.ok, wait: r.wait || 0 };
+    });
+    ipcMain.handle('lock:get', (e) => (isLocalSender(e) && !locked ? lockService().status() : null));
+    ipcMain.handle('lock:save', (e, p) => {
+      if (!isLocalSender(e) || locked || !p || typeof p !== 'object') return { ok: false, error: 'Not allowed.' };
+      return lockService().save({
+        enabled: !!p.enabled, minutes: p.minutes,
+        newPin: typeof p.newPin === 'string' && p.newPin ? p.newPin : null,
+        currentPin: typeof p.currentPin === 'string' ? p.currentPin : undefined,
+      });
+    });
+    ipcMain.handle('lock:remove', (e, pin) => (isLocalSender(e) && !locked ? lockService().remove(typeof pin === 'string' ? pin : '') : { ok: false, error: 'Not allowed.' }));
+    ipcMain.handle('lock:now', (e) => (isLocalSender(e) && !locked ? lockNow() : false));
+    if (!process.env.CC_TEST_SCRIPT) {
+      setInterval(() => idleCheck(), 15000);
+      powerMonitor.on('lock-screen', () => lockNow()); // Windows key + L
+      powerMonitor.on('suspend', () => lockNow());     // lid closed or sleep
+    }
+    // ---- Pick up where you left off (Home) ----
+    const recentOn = () => !(loadedConfig && loadedConfig.homeRecent === false);
+    ipcMain.handle('recent:list', async (e, force) => {
+      if (!isLocalSender(e)) return { ok: false, items: [] };
+      if (!recentOn()) return { ok: true, disabled: true, items: [] };
+      if (!recentSvc) recentSvc = createRecent();
+      return recentSvc.list(!!force);
+    });
+    ipcMain.handle('recent:open', async (e, id, reveal) => {
+      if (!isLocalSender(e) || !recentSvc) return { ok: false, error: 'Not allowed.' };
+      const hit = recentSvc.pick(id); // only something the latest list returned can be opened
+      if (!hit) return { ok: false, error: 'That item is no longer in the list. Refresh and try again.' };
+      let st;
+      try { st = fs.statSync(hit.path); } catch { return { ok: false, error: 'That file was not found. It may have been moved or deleted.' }; }
+      const risky = st.isFile() && RISKY_EXT.has(path.extname(hit.path).toLowerCase());
+      if (reveal || risky) { shell.showItemInFolder(hit.path); return { ok: true, revealed: true }; }
+      const err = await shell.openPath(hit.path);
+      return err ? { ok: false, error: 'Could not open that file.' } : { ok: true };
+    });
+    ipcMain.handle('settings:home-recent', (e, on) => {
+      if (!isLocalSender(e) || typeof on !== 'boolean') return { ok: false };
+      try { updateConfigFile((cfg) => { if (on) delete cfg.homeRecent; else cfg.homeRecent = false; }); } catch { return { ok: false }; }
+      if (on) delete loadedConfig.homeRecent; else loadedConfig.homeRecent = false;
+      notifyHomeBackground(); // tells Home to redraw
+      return { ok: true };
+    });
+    ipcMain.handle('settings:home-recent-get', (e) => (isLocalSender(e) ? { on: recentOn() } : null));
+    // ---- Searching this PC from the search box ----
+    ipcMain.handle('files:search', (e, q) => {
+      if (!isLocalSender(e) || typeof q !== 'string') return { ok: false, results: [] };
+      if (!fileSearch) fileSearch = createFileSearch();
+      return fileSearch.search(q);
+    });
+    ipcMain.handle('files:open', async (e, id, reveal) => {
+      if (!isLocalSender(e) || !fileSearch) return { ok: false, error: 'Not allowed.' };
+      const hit = fileSearch.pick(id); // only something the last search returned can be opened
+      if (!hit) return { ok: false, error: 'That result is no longer available. Search again.' };
+      let st;
+      try { st = fs.statSync(hit.path); } catch { return { ok: false, error: 'That file was not found. It may have been moved.' }; }
+      const risky = st.isFile() && RISKY_EXT.has(path.extname(hit.path).toLowerCase());
+      if (reveal || risky) { shell.showItemInFolder(hit.path); return { ok: true, revealed: true, note: risky ? 'For safety, programs and scripts are not run from here, so the folder was shown instead.' : '' }; }
+      const err = await shell.openPath(hit.path);
+      return err ? { ok: false, error: 'Could not open that file.' } : { ok: true };
+    });
+    // ---- Home page background ----
+    ipcMain.handle('home:background', (e) => (isLocalSender(e) ? homeBackground() : null));
+    ipcMain.handle('settings:bg-pick', async (e) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      let src;
+      if (testPickImage) src = await testPickImage();
+      else {
+        const r = await dialog.showOpenDialog(win, { title: 'Choose a background picture', properties: ['openFile'], filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+        src = r.canceled ? null : r.filePaths[0];
+      }
+      if (!src) return { ok: false, cancelled: true };
+      try {
+        const st = fs.statSync(src);
+        if (!st.isFile()) return { ok: false, error: 'That is not a picture file.' };
+        if (st.size > BG_MAX_BYTES) return { ok: false, error: 'That picture is larger than 8 MB. Choose a smaller one (a screen-sized picture is plenty).' };
+        const buf = fs.readFileSync(src);
+        const kind = imageKind(buf);
+        if (!kind) return { ok: false, error: 'Please choose a PNG, JPG or WebP picture.' };
+        const name = 'home-background.' + kind;
+        const dest = path.join(app.getPath('userData'), name);
+        const tmp = dest + '.tmp';
+        fs.writeFileSync(tmp, buf);
+        clearBackgroundFiles();
+        fs.renameSync(tmp, dest);
+        const dim = loadedConfig.homeBackground ? clampDim(loadedConfig.homeBackground.dim) : 35;
+        saveBackgroundSetting({ file: name, dim });
+        notifyHomeBackground();
+        return { ok: true, dim };
+      } catch { return { ok: false, error: 'Could not use that picture.' }; }
+    });
+    ipcMain.handle('settings:bg-dim', (e, n) => {
+      if (!isLocalSender(e) || !loadedConfig.homeBackground) return { ok: false };
+      try { saveBackgroundSetting({ file: loadedConfig.homeBackground.file, dim: clampDim(n) }); } catch { return { ok: false }; }
+      notifyHomeBackground();
+      return { ok: true };
+    });
+    ipcMain.handle('settings:bg-remove', (e) => {
+      if (!isLocalSender(e)) return { ok: false };
+      try { clearBackgroundFiles(); saveBackgroundSetting(null); } catch { return { ok: false }; }
+      notifyHomeBackground();
+      return { ok: true };
+    });
+    // ---- Settings backups ----
+    const backupsDir = () => path.join(path.dirname(configPath()), 'config-backups');
+    ipcMain.handle('settings:backups', (e) => (isLocalSender(e) ? listBackups(backupsDir()) : []));
+    ipcMain.handle('settings:restore-backup', (e, name) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      return restoreBackup(name, {
+        dir: backupsDir(), file: configPath(), backupNow: backupConfigRolling,
+        check: (text) => rawSettingsError(text, { configVersion: CONFIG_VERSION, cleanSections, defaults: defaultSections() }),
+      });
+    });
+    // ---- Safer sessions ----
+    const denyMost = (ses) => {
+      const ok = (p) => p === 'fullscreen' || p === 'clipboard-sanitized-write';
+      ses.setPermissionRequestHandler((_wc, permission, cb) => cb(ok(permission)));
+      ses.setPermissionCheckHandler((_wc, permission) => ok(permission));
+    };
+    denyMost(session.fromPartition(VAULT_PARTITION)); // the vault page may not ask for the camera, location and so on
+    keepSignedIn(session.fromPartition(PARTITION), Array.isArray(loadedConfig.keepSignedIn) ? loadedConfig.keepSignedIn : ['domo.com']);
     ipcMain.handle('cc:current', () => currentId);
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   });
 
+  // A site with a faulty or untrusted certificate is never loaded, and there is no "continue anyway".
+  app.on('certificate-error', (event, _wc, _url, _error, _cert, callback) => { event.preventDefault(); callback(false); });
+
   app.on('web-contents-created', (_e, contents) => {
+    // Developer tools stay shut unless the app was started for development with TH_DEVTOOLS=1.
+    if (process.env.TH_DEVTOOLS !== '1' && !process.env.CC_TEST_SCRIPT) contents.on('devtools-opened', () => contents.closeDevTools());
+    // Right-click in a text box or on selected text: spelling suggestions, Cut/Copy/Paste. (The Browser tab builds its own menu.)
+    contents.on('context-menu', (_event, params) => {
+      if (browserService && browserService.owns(contents)) return;
+      const template = contextTemplate(contents, params);
+      if (template.length) Menu.buildFromTemplate(template).popup();
+    });
     contents.on('before-input-event', (event, input) => {
+      if (locked) { if (!lockView || contents !== lockView.webContents) event.preventDefault(); return; } // nothing but the PIN box gets keys
       if (handleKey(contents, input)) event.preventDefault();
     });
   });
