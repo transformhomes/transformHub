@@ -177,6 +177,18 @@ function driveRoots() {
     seen.add(id);
     out.push({ id, name, path: p });
   }
+  // Your own Desktop, Downloads, Documents, Pictures, Music and Videos folders, listed after the drives.
+  // Windows supplies the real location (so a OneDrive-redirected Documents folder works). Turn off with "explorer": { "quickFolders": false }.
+  if (!(cfg && cfg.quickFolders === false) && process.platform === 'win32') {
+    for (const [key, name] of [['desktop', 'Desktop'], ['downloads', 'Downloads'], ['documents', 'Documents'], ['pictures', 'Pictures'], ['music', 'Music'], ['videos', 'Videos']]) {
+      const id = 'drive:' + key;
+      if (seen.has(id)) continue;
+      let p;
+      try { p = app.getPath(key); if (!p || !fs.existsSync(p)) continue; } catch { continue; }
+      seen.add(id);
+      out.push({ id, name, path: p });
+    }
+  }
   return out;
 }
 
