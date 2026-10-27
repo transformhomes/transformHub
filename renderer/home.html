@@ -2,32 +2,110 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:">
 <title>Home</title>
 <link rel="stylesheet" href="shared.css">
 <style>
+  #bg { position:fixed; inset:0; z-index:0; background-size:cover; background-position:center; background-repeat:no-repeat; display:none; }
+  #bg.on { display:block; }
+  #bg::after { content:''; position:absolute; inset:0; background:var(--bg); opacity:var(--dim, .35); }
+  .page { position:relative; z-index:1; }
+  .tile { box-shadow:0 1px 3px rgba(0,0,0,.25); }
   .cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; margin-top:18px; }
   .card h2 { display:flex; justify-content:space-between; align-items:baseline; }
   .count { font-size:12px; color:var(--muted); font-weight:400; }
   .ev { display:flex; gap:10px; padding:6px 0; border-bottom:1px solid var(--line); }
   .ev .when { color:var(--muted); font-size:12.5px; min-width:84px; }
-  .links { margin-top:20px; }
+  #recentSlot { margin-top:16px; }
+  #recentSlot:empty { display:none; }
+  .rc-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+  .rc-head h2 { margin:0; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { padding:4px 12px; border-radius:20px; font-size:12.5px; background:var(--panel); }
+  .chip[aria-pressed="true"] { background:var(--accent-bg); border-color:var(--accent-bg); color:var(--chip-fg); font-weight:600; }
+  .rc-line { display:flex; align-items:center; gap:4px; border-bottom:1px solid var(--line); }
+  .rc-line:last-child { border-bottom:0; }
+  .rc-row { display:flex; align-items:center; gap:12px; flex:1; min-width:0; text-align:left; padding:8px 10px; border:0; border-radius:8px; background:transparent; }
+  .rc-row:hover, .rc-row:focus-visible { background:var(--hover); }
+  .rc-badge { flex:none; width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#fff; font-size:10.5px; font-weight:700; letter-spacing:.02em; }
+  .rc-badge.doc { background:#2b6cd4; } .rc-badge.xls { background:#1d8a4f; } .rc-badge.pdf { background:#c8382c; } .rc-badge.dir { background:#d79a1c; } .rc-badge.ppt { background:#c4561e; } .rc-badge.oth { background:#6b7788; }
+  .rc-main { flex:1; min-width:0; }
+  .rc-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rc-path { color:var(--muted); font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+  .rc-when { flex:none; color:var(--muted); font-size:12.5px; min-width:110px; text-align:right; }
+  .rc-show { flex:none; padding:3px 10px; font-size:12px; }
+  .rc-more { margin-top:8px; }
   .focus { cursor:pointer; text-align:left; width:100%; }
   .focus:hover { border-color:var(--accent); }
+  #outlookSlot { margin-top:14px; }
+  #outlookSlot:empty { display:none; }
+  .sum { display:flex; gap:28px; flex-wrap:wrap; align-items:center; }
+  .sum .big { font-size:26px; font-weight:600; line-height:1.1; }
+  .sum button.stat { text-align:left; background:transparent; border:0; padding:4px 0; cursor:pointer; }
+  .sum button.stat:hover .big { color:var(--accent); }
+  .cal { width:100%; border-collapse:separate; border-spacing:2px; table-layout:fixed; }
+  .cal th { font-size:11px; font-weight:600; color:var(--muted); padding:2px 0; }
+  .cal td { padding:0; }
+  .cal button.day { width:100%; height:34px; padding:0; border-radius:8px; border:1px solid transparent; background:transparent; position:relative; font-size:13px; }
+  .cal button.day.out { color:var(--muted); opacity:.55; }
+  .cal button.day.today { border-color:var(--accent); font-weight:600; }
+  .cal button.day.sel { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .cal button.day .dot { position:absolute; left:50%; bottom:3px; width:5px; height:5px; margin-left:-2.5px; border-radius:50%; background:var(--accent); }
+  .cal button.day.sel .dot { background:var(--on-accent); }
+  .calhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .calhead button { padding:4px 10px; }
+  .page { max-width:none; }
+  .home { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:18px; align-items:start; }
+  @media (max-width:1000px) { .home { grid-template-columns:minmax(0,1fr); } }
+  aside .card { position:sticky; top:12px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:8px; margin-top:6px; }
+  .tile { position:relative; display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 6px 8px; border-radius:10px; background:var(--panel); border:1px solid var(--line); min-width:0; }
+  .tile:hover { border-color:var(--accent); background:var(--hover); }
+  .tile img, .tile .letter { width:40px; height:40px; border-radius:8px; object-fit:contain; }
+  .tile .letter { display:grid; place-items:center; background:var(--accent-bg); color:var(--chip-fg); font-weight:600; font-size:18px; }
+  .tile .nm { font-size:12.5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tile.dragging { opacity:.4; }
+  .tile.drop-before { box-shadow:-3px 0 0 0 var(--accent); }
+  .tile.drop-after { box-shadow:3px 0 0 0 var(--accent); }
+  .tile.add .plus { width:40px; height:40px; border-radius:8px; border:1.5px dashed var(--line-strong); display:grid; place-items:center; font-size:22px; color:var(--muted); }
+  .tile .rm { position:absolute; top:2px; right:2px; width:22px; height:22px; padding:0; border-radius:50%; font-size:14px; line-height:1; color:var(--danger); background:var(--card); border:1px solid var(--line); }
+  .aside-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:2px; }
+  .aside-head button { padding:3px 10px; font-size:12.5px; }
 </style>
 </head>
 <body>
+<div id="bg" aria-hidden="true"></div>
 <div class="page">
   <h1 id="greeting">Welcome</h1>
   <p class="sub" id="date"></p>
-  <div id="focusSlot"></div>
-  <div class="cols" id="cols"></div>
-  <div class="row links" id="links"></div>
-  <p class="muted" style="margin-top:22px;font-size:12.5px">Tasks are the ones saved in this app. Events include your linked Outlook calendar when one is set up. Mail, Teams and OneDrive stay in their own tabs.</p>
+  <div class="home">
+    <div class="main">
+      <div id="focusSlot"></div>
+      <div id="outlookSlot"></div>
+      <div class="cols" id="cols"></div>
+      <div id="recentSlot"></div>
+      <p class="muted" style="margin-top:22px;font-size:12.5px">Tasks are the ones saved in this app. Events include your linked Outlook calendar when one is set up. Mail, Teams and OneDrive stay in their own tabs.</p>
+    </div>
+    <aside id="appsAside" aria-label="Apps"></aside>
+  </div>
 </div>
 
 <script src="common.js"></script>
+<script src="sortable.js"></script>
 <script>
+  // Background picture chosen in Settings (kept as a copy inside the app's data folder)
+  async function applyBackground() {
+    const bg = document.getElementById('bg');
+    let b = null;
+    try { b = await window.cc.getHomeBackground(); } catch { /* no picture */ }
+    if (b && b.dataUrl) {
+      bg.style.backgroundImage = 'url("' + b.dataUrl + '")';
+      bg.style.setProperty('--dim', String(Math.max(0, Math.min(85, Number(b.dim) || 0)) / 100));
+      bg.classList.add('on');
+    } else { bg.classList.remove('on'); bg.style.backgroundImage = ''; }
+  }
+  applyBackground();
+  window.cc.onHomeBackground(() => { applyBackground(); loadRecent(false); });
   const el = (id) => document.getElementById(id);
 
   function card(title, count, body) {
@@ -42,6 +120,117 @@
       h('span', { text: ev.title }));
   }
 
+  // Own events, calendar-feed events and classic Outlook appointments, without doubles
+  function combinedEvents() {
+    const seen = new Set();
+    return [...allEvents(), ...((outlook.state === 'ok' && outlook.events) || [])].filter((e) => {
+      const k = [e.date, e.start || '', String(e.title || '').toLowerCase()].join('|');
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  function outlookCard(todayEvents) {
+    if (outlook.state === 'off') return null;
+    if (outlook.state === 'closed') return h('div', { class: 'card' }, h('h2', {}, h('span', { text: 'Outlook' })), h('div', { class: 'muted', text: 'Open classic Outlook on this computer to see your unread emails and appointments here.' }));
+    if (outlook.state !== 'ok') return h('div', { class: 'card' }, h('h2', {}, h('span', { text: 'Outlook' })), h('div', { class: 'muted', text: 'Could not read Outlook just now. It will try again shortly.' }));
+    const u = outlook.unread;
+    const n = todayEvents.length;
+    const nowHm = new Date().toTimeString().slice(0, 5);
+    const next = todayEvents.find((e) => !e.allDay && e.start >= nowHm);
+    return h('div', { class: 'card' },
+      h('h2', {}, h('span', { text: 'Outlook' }), h('span', { class: 'count', text: 'classic Outlook on this computer' })),
+      h('div', { class: 'sum' },
+        h('button', { class: 'stat', onclick: () => window.cc.go('mail'), title: 'Open the Inbox tab' },
+          h('div', { class: 'big', text: String(u) }), h('div', { class: 'muted', text: u === 1 ? 'unread email' : 'unread emails' })),
+        h('div', {}, h('div', { class: 'big', text: String(n) }), h('div', { class: 'muted', text: n === 1 ? 'appointment today' : 'appointments today' })),
+        next && h('div', {}, h('div', { style: 'font-weight:600', text: 'Next: ' + fmtTime(next.start) }), h('div', { class: 'muted', text: next.title }))));
+  }
+
+  function monthCard(events) {
+    const first = new Date(viewMonth.y, viewMonth.m, 1);
+    const lead = (first.getDay() + 6) % 7; // weeks start on Monday
+    const start = new Date(viewMonth.y, viewMonth.m, 1 - lead);
+    const today = todayStr();
+    const counts = {};
+    for (const e of events) counts[e.date] = (counts[e.date] || 0) + 1;
+    const rows = [];
+    for (let r = 0; r < 6; r++) {
+      const cells = [];
+      for (let c = 0; c < 7; c++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + r * 7 + c);
+        const key = ymd(d);
+        cells.push(h('td', {}, h('button', {
+          class: 'day' + (d.getMonth() !== viewMonth.m ? ' out' : '') + (key === today ? ' today' : '') + (key === selDay ? ' sel' : ''),
+          'aria-label': fmtDate(key, { weekday: 'long', day: 'numeric', month: 'long' }) + (counts[key] ? ', ' + counts[key] + (counts[key] === 1 ? ' event' : ' events') : ''),
+          onclick: () => { selDay = key; render(); },
+        }, String(d.getDate()), counts[key] && h('span', { class: 'dot' }))));
+      }
+      rows.push(h('tr', {}, cells));
+    }
+    const dayEvents = sortEvents(events.filter((e) => e.date === selDay));
+    const shift = (n) => { const d = new Date(viewMonth.y, viewMonth.m + n, 1); viewMonth = { y: d.getFullYear(), m: d.getMonth() }; render(); };
+    return h('div', { class: 'card' },
+      h('div', { class: 'calhead' },
+        h('button', { class: 'ghost', 'aria-label': 'Previous month', onclick: () => shift(-1), text: '‹' }),
+        h('h2', { style: 'margin:0', text: new Date(viewMonth.y, viewMonth.m, 1).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }) }),
+        h('button', { class: 'ghost', 'aria-label': 'Next month', onclick: () => shift(1), text: '›' })),
+      h('table', { class: 'cal' },
+        h('thead', {}, h('tr', {}, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('th', { text: d })))),
+        h('tbody', {}, rows)),
+      h('div', { class: 'group-title', text: fmtDate(selDay, { weekday: 'long', day: 'numeric', month: 'long' }) }),
+      dayEvents.length ? h('div', {}, dayEvents.map((e) => evLine(e, false))) : h('div', { class: 'empty', text: 'Nothing on this day.' }));
+  }
+
+  function renderApps() {
+    const aside = el('appsAside');
+    const note = h('div', { class: 'msg err', style: 'display:none;margin-top:8px' });
+    const say = (text, ok) => { note.className = 'msg ' + (ok ? 'ok' : 'err'); note.textContent = text; note.style.display = ''; };
+    const tiles = apps.map((a) => {
+      const icon = icons[a.id] ? h('img', { src: icons[a.id], alt: '' }) : h('div', { class: 'letter', 'aria-hidden': 'true', text: a.name.charAt(0).toUpperCase() });
+      const tile = h('button', { class: 'tile', 'data-id': a.id, 'aria-label': (editing ? 'Remove ' : 'Open ') + a.name, title: editing ? 'Remove ' + a.name + ' from this list' : 'Open ' + a.name, onclick: async () => {
+        if (editing) {
+          const r = await window.cc.removeApp(a.id);
+          if (r && r.ok) { await reloadApps(); } else say((r && r.error) || 'Could not remove it.', false);
+          return;
+        }
+        const r = await window.cc.launchApp(a.id);
+        if (!(r && r.ok)) say((r && r.error) || 'Could not start ' + a.name + '.', false); else note.style.display = 'none';
+      } }, icon, h('span', { class: 'nm', text: a.name }), editing && h('span', { class: 'rm', 'aria-hidden': 'true', text: '×' }));
+      return tile;
+    });
+    const add = h('button', { class: 'tile add', 'aria-label': 'Add an app', title: 'Add a program from this computer', onclick: async () => {
+      const r = await window.cc.addApp();
+      if (r && r.ok && !r.cancelled) { await reloadApps(); say('Added ' + r.name + '.', true); }
+      else if (r && !r.ok) say(r.error || 'Could not add it.', false);
+    } }, h('div', { class: 'plus', 'aria-hidden': 'true', text: '+' }), h('span', { class: 'nm', text: 'Add app' }));
+    const tilesBox = h('div', { class: 'tiles' }, tiles, !editing && add);
+    aside.replaceChildren(h('div', { class: 'card' },
+      h('div', { class: 'aside-head' }, h('h2', { style: 'margin:0', text: 'Apps' }),
+        apps.length > 0 && h('button', { class: 'ghost', onclick: () => { editing = !editing; renderApps(); } }, editing ? 'Done' : 'Edit')),
+      tilesBox,
+      !apps.length && h('p', { class: 'muted', style: 'font-size:12.5px;margin:10px 0 0', text: apps.length ? 'Drag a tile to move it, or use Alt+Shift+Arrow keys on a tile.' : 'Add programs from this computer to open them from here. They open in their own windows, outside Transform Workstation.' }),
+      note));
+    makeSortable(tilesBox, {
+      item: '.tile', axis: 'x', idOf: (t) => t.dataset.id || null,
+      onReorder: async (ids, focusId) => {
+        const r = await window.cc.reorderApps(ids);
+        if (!(r && r.ok)) { say((r && r.error) || 'Could not move it.', false); return; }
+        await reloadApps();
+        if (focusId) { const t = document.querySelector('.tile[data-id="' + focusId + '"]'); if (t) t.focus(); }
+      },
+    });
+  }
+
+  async function reloadApps() {
+    const r = await window.cc.getRoots();
+    apps = (r && r.apps) || [];
+    icons = (window.cc.appIcons && (await window.cc.appIcons())) || {};
+    if (!apps.length) editing = false;
+    renderApps();
+  }
+
   function render() {
     const now = new Date();
     const hr = now.getHours();
@@ -52,8 +241,9 @@
     const tasks = App.data.tasks.filter((t) => !t.done);
     const overdue = sortTasks(tasks.filter((t) => t.due && t.due < today));
     const dueToday = tasks.filter((t) => t.due === today);
-    const todayEvents = sortEvents(allEvents().filter((e) => e.date === today));
-    const soon = sortEvents(allEvents().filter((e) => e.date > today && e.date <= addDays(today, 7)));
+    const evs = combinedEvents();
+    const todayEvents = sortEvents(evs.filter((e) => e.date === today));
+    const soon = sortEvents(evs.filter((e) => e.date > today && e.date <= addDays(today, 7)));
 
     const focusSlot = el('focusSlot');
     focusSlot.replaceChildren();
@@ -66,24 +256,106 @@
         h('div', { class: 'muted', text: n + (n === 1 ? ' open task' : ' open tasks') + ' · open the Explorer to continue' })));
     }
 
+    const oc = outlookCard(todayEvents);
+    el('outlookSlot').replaceChildren(...(oc ? [oc] : []));
+
+    renderApps();
+
     const needs = [];
     if (overdue.length) { needs.push(h('div', { class: 'group-title', style: 'margin-top:0;color:var(--danger)', text: 'Overdue' })); overdue.slice(0, 6).forEach((t) => needs.push(taskRow(t))); }
     if (dueToday.length) { needs.push(h('div', { class: 'group-title', style: overdue.length ? '' : 'margin-top:0', text: 'Due today' })); dueToday.forEach((t) => needs.push(taskRow(t))); }
     if (!needs.length) needs.push(h('div', { class: 'empty', text: 'Nothing overdue or due today.' }));
 
     el('cols').replaceChildren(
+      monthCard(evs),
       card('Needs attention', overdue.length + dueToday.length, h('div', {}, needs)),
       card('Today', todayEvents.length, todayEvents.length ? h('div', {}, todayEvents.map((e) => evLine(e, false))) : h('div', { class: 'empty', text: 'No events today.' })),
       card('Coming up (7 days)', soon.length, soon.length ? h('div', {}, soon.map((e) => evLine(e, true))) : h('div', { class: 'empty', text: 'Nothing in the next 7 days.' })));
 
-    const links = el('links');
-    links.replaceChildren(
-      ...[['mail', 'Inbox'], ['tasks', 'Tasks'], ['calendar', 'Calendar'], ['teams', 'Teams'], ['claude', 'Claude']]
-        .map(([id, label]) => h('button', { onclick: () => window.cc.go(id), text: label })));
+    renderRecent();
+  }
+
+  // ---- Pick up where you left off ----
+  let recent = { state: 'loading', items: [], filter: 'all', all: false, note: null };
+  const KINDS = [['all', 'All'], ['doc', 'Documents'], ['xls', 'Spreadsheets'], ['pdf', 'PDFs'], ['dir', 'Folders']];
+  const EXT = { doc: ['.doc', '.docx', '.docm', '.rtf', '.txt', '.md', '.odt'], xls: ['.xls', '.xlsx', '.xlsm', '.csv', '.ods'], pdf: ['.pdf'], ppt: ['.ppt', '.pptx', '.odp'] };
+  function kindOf(it) {
+    if (it.isFolder) return 'dir';
+    for (const k of Object.keys(EXT)) if (EXT[k].includes(it.ext)) return k;
+    return 'oth';
+  }
+  const BADGE = { doc: 'DOC', xls: 'XLS', pdf: 'PDF', dir: '▤', ppt: 'PPT' };
+  function whenLabel(ms) {
+    const d = new Date(ms), now = new Date(), diff = now - d;
+    const hm = d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (d.toDateString() === now.toDateString()) return Math.floor(diff / 3600000) + 'h ago';
+    const y = new Date(now); y.setDate(y.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'yesterday at ' + hm;
+    return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+  }
+  async function loadRecent(force) {
+    let r = null;
+    try { r = await window.cc.getRecent(!!force); } catch { /* shown as unavailable */ }
+    if (!r) recent.state = 'error';
+    else if (r.disabled) recent.state = 'off';
+    else if (r.unsupported) recent.state = 'unsupported';
+    else { recent.state = r.ok ? 'ok' : (r.items && r.items.length ? 'ok' : 'error'); recent.items = r.items || []; }
+    renderRecent();
+  }
+  async function openRecent(it, reveal) {
+    const r = await window.cc.openRecent(it.id, reveal);
+    recent.note = r && r.ok ? null : { text: (r && r.error) || 'Could not open that.' };
+    if (recent.note) renderRecent();
+  }
+  function renderRecent() {
+    const slot = el('recentSlot');
+    if (recent.state === 'off' || recent.state === 'loading') { slot.replaceChildren(); return; }
+    if (recent.state === 'unsupported') { slot.replaceChildren(card('Pick up where you left off', null, h('div', { class: 'empty', text: 'Your recent files appear here on Windows.' }))); return; }
+    if (recent.state === 'error') { slot.replaceChildren(card('Pick up where you left off', null, h('div', { class: 'empty', text: 'Could not read your recent files just now. It will try again shortly.' }))); return; }
+    const kinds = new Set(recent.items.map(kindOf));
+    const chips = KINDS.filter(([k]) => k === 'all' || kinds.has(k));
+    if (!chips.some(([k]) => k === recent.filter)) recent.filter = 'all';
+    const list = recent.items.filter((it) => recent.filter === 'all' || kindOf(it) === recent.filter);
+    const shown = recent.all ? list : list.slice(0, 8);
+    const rows = shown.map((it) => {
+      const k = kindOf(it);
+      return h('div', { class: 'rc-line' },
+        h('button', { class: 'rc-row', onclick: () => openRecent(it, false), title: 'Open ' + it.name + '\n' + it.folder, 'aria-label': 'Open ' + it.name + ', ' + whenLabel(it.when) },
+          h('span', { class: 'rc-badge ' + k, 'aria-hidden': 'true', text: BADGE[k] || (it.ext ? it.ext.slice(1, 4).toUpperCase() : 'FILE') }),
+          h('span', { class: 'rc-main' }, h('div', { class: 'rc-name', text: it.name }), h('div', { class: 'rc-path' }, h('bdi', { text: it.folder }))),
+          h('span', { class: 'rc-when', text: whenLabel(it.when) })),
+        h('button', { class: 'ghost rc-show', onclick: () => openRecent(it, true), title: 'Show in its folder', 'aria-label': 'Show ' + it.name + ' in its folder', text: 'Show in folder' }));
+    });
+    slot.replaceChildren(h('div', { class: 'card' },
+      h('div', { class: 'rc-head' }, h('h2', { text: 'Pick up where you left off' }),
+        h('div', { class: 'chips', role: 'group', 'aria-label': 'Filter' }, chips.map(([k, l]) => h('button', { class: 'chip', 'aria-pressed': String(recent.filter === k), onclick: () => { recent.filter = k; recent.all = false; renderRecent(); }, text: l })))),
+      rows.length ? h('div', {}, rows) : h('div', { class: 'empty', text: recent.items.length ? 'Nothing of this kind in your recent files.' : 'Nothing opened lately. Files you open in Word, Excel, PDF viewers and File Explorer show up here.' }),
+      list.length > 8 && h('button', { class: 'ghost rc-more', onclick: () => { recent.all = !recent.all; renderRecent(); }, text: recent.all ? 'Show fewer' : 'Show ' + (list.length - 8) + ' more' }),
+      recent.note && h('div', { class: 'msg err', role: 'alert', style: 'margin-top:8px;color:var(--danger)', text: recent.note.text })));
   }
 
   let settings = { userName: '' };
-  window.cc.getSettings().then((s) => { settings = s || settings; App.init(render); });
+  let apps = [];
+  let icons = {};
+  let editing = false;
+  let outlook = { state: 'off' };
+  let selDay = todayStr();
+  let viewMonth = { y: new Date().getFullYear(), m: new Date().getMonth() };
+  const loadOutlook = (force) => (window.cc.getOutlook ? window.cc.getOutlook(force) : Promise.resolve({ state: 'off' }))
+    .then((o) => { outlook = o || { state: 'off' }; render(); }).catch(() => {});
+  Promise.all([window.cc.getSettings(), window.cc.getRoots()]).then(async ([s, r]) => {
+    settings = s || settings;
+    apps = (r && r.apps) || [];
+    icons = (window.cc.appIcons && (await window.cc.appIcons())) || {};
+    App.init(render);
+    loadOutlook(false);
+  });
+  setInterval(() => loadOutlook(false), 120000);
+  window.addEventListener('focus', () => { reloadApps(); loadOutlook(false); loadRecent(true); });
+  setInterval(() => loadRecent(false), 60000);
+  loadRecent(true);
 </script>
 </body>
 </html>
