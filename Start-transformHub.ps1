@@ -1,4 +1,4 @@
-# Opens transformHub. Run via transformHub.cmd (double-click) or: powershell -File Start-transformHub.ps1
+# Opens Transform Workstation. Run via transformHub.cmd (double-click) or: powershell -File Start-transformHub.ps1
 # Add -Shortcut to create a desktop shortcut that runs this launcher.
 param([switch]$Shortcut)
 $ErrorActionPreference = 'Stop'
@@ -7,12 +7,12 @@ Set-Location $root
 
 function Fail($msg) {
   Add-Type -AssemblyName PresentationFramework
-  [void][System.Windows.MessageBox]::Show($msg, 'transformHub', 'OK', 'Warning')
+  [void][System.Windows.MessageBox]::Show($msg, 'Transform Workstation', 'OK', 'Warning')
   exit 1
 }
 
 if ($Shortcut) {
-  $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'transformHub.lnk'
+  $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Transform Workstation.lnk'
   $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
   $s.TargetPath = Join-Path $root 'transformHub.cmd'
   $s.WorkingDirectory = $root

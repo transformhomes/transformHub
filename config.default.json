@@ -4,7 +4,9 @@
   "dataDir": null,
   "arcaneUrl": "http://127.0.0.1:7600",
   "explorer": {
-    "drives": ["C:\\"]
+    "drives": [
+      "C:\\"
+    ]
   },
   "projects": [
     {
@@ -34,6 +36,18 @@
       "icon": "folder",
       "type": "local",
       "file": "renderer/projects.html"
+    },
+    {
+      "id": "drmd",
+      "label": "Dr. MD",
+      "icon": "book",
+      "type": "drmd"
+    },
+    {
+      "id": "browser",
+      "label": "Browser",
+      "icon": "globe",
+      "type": "browser"
     },
     {
       "id": "tasks",
@@ -69,6 +83,13 @@
       "icon": "star",
       "type": "web",
       "url": "https://claude.ai/new"
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "icon": "gear",
+      "type": "local",
+      "file": "renderer/settings.html"
     }
   ],
   "userName": "",

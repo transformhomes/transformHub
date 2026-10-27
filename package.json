@@ -1,22 +1,26 @@
 {
   "name": "th-command-centre",
-  "version": "0.7.3",
-  "description": "Transform Homes Command Centre - one window for Outlook, calendar, OneDrive, To Do and Claude",
+  "version": "0.8.0",
+  "description": "Transform Workstation - one window for Outlook, calendar, OneDrive, To Do, Claude and your projects",
   "main": "main.js",
   "author": "Transform Homes",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "drmd": "node scripts/install-drmd.js",
+    "harden": "node scripts/harden.js",
+    "postinstall": "node scripts/harden.js"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
+    "@electron/fuses": "^1.8.0",
+    "electron": "^45.0.0",
     "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "au.com.transformhomes.commandcentre",
-    "productName": "TH Command Centre",
+    "productName": "Transform Workstation",
     "files": [
       "main.js",
       "preload.js",
@@ -25,13 +29,25 @@
       "feeds.js",
       "uistate.js",
       "todo.js",
+      "drmd/**/*",
+      "preload-drmd.js",
+      "drmd.js",
+      "browser.js",
+      "outlook.js",
+      "spell.js",
+      "settings.js",
+      "preload-browser.js",
       "config.default.json",
       "renderer/**/*",
-      "transformHub.png"
+      "transformHub.png",
+      "lock.js",
+      "backups.js",
+      "preload-lock.js","filesearch.js","recent.js"
     ],
     "win": {
       "target": "nsis"
-    }
+    },
+    "afterPack": "scripts/harden.js"
   },
   "dependencies": {
     "ical.js": "^1.5.0"

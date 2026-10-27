@@ -8,3 +8,8 @@ config.json
 config.*.json
 !config.default.json
 *.zip
+
+# Built Dr. MD copy (made with: npm run drmd)
+drmd/
+drmd.new/
+drmd.old/
