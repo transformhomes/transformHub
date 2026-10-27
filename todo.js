@@ -25,10 +25,25 @@ const EXTRACT_SOURCE = `(() => {
     const cb = el.querySelector(CB);
     const label = clean(cb.getAttribute('aria-label'));
     const UI = /^(mark as|completed|not completed|important|add to my day|my day|tasks|planned)/i;
-    const leaves = [...el.querySelectorAll('*')].filter((n) => !n.children.length && n !== cb && !cb.contains(n)).map((n) => clean(n.textContent)).filter(Boolean);
+    const leafEls = [...el.querySelectorAll('*')].filter((n) => !n.children.length && n !== cb && !cb.contains(n) && clean(n.textContent));
+    const leaves = leafEls.map((n) => clean(n.textContent));
     const lines = String(el.innerText || el.textContent || '').split(/\\n+/).map(clean).filter(Boolean);
+    // A title can be split into several inner pieces (words, links, highlights), so one piece is not always the whole title.
+    // Start from the first piece that is not a button label and widen to the surrounding box while that box holds
+    // nothing but title (no checkbox, button, or due-date/step/list labels).
+    const META = /^(due |today$|tomorrow$|yesterday$|overdue|repeat|my day|important|add to my day|tasks$|planned$|step|\\d+ of \\d+|reminder)/i;
+    const first = leafEls.find((n) => !UI.test(clean(n.textContent)));
+    let box = first || null;
+    while (box && box.parentElement && box.parentElement !== el) {
+      const p = box.parentElement;
+      if (p.contains(cb) || p.querySelector('button,[role=button],[role=checkbox],input')) break;
+      const hasOther = [...p.querySelectorAll('*')].some((n) => !n.children.length && !box.contains(n) && META.test(clean(n.textContent)));
+      if (hasOther) break;
+      box = p;
+    }
+    const boxText = box ? clean(box.innerText || box.textContent) : '';
     let title = clean(el.getAttribute('aria-label'));
-    if (!title || /^mark as/i.test(title)) title = leaves.find((l) => !UI.test(l)) || lines.find((l) => !UI.test(l)) || '';
+    if (!title || /^mark as/i.test(title)) title = (boxText && !UI.test(boxText) ? boxText : '') || leaves.find((l) => !UI.test(l)) || lines.find((l) => !UI.test(l)) || '';
     if (!title) continue;
     const done = cb.getAttribute('aria-checked') === 'true' || cb.checked === true || /mark as not completed/i.test(label);
     tasks.push({ title: title.slice(0, 300), done });
