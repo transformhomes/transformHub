@@ -22,6 +22,8 @@
   button.item:hover { background:var(--hover); color:var(--fg); }
   button.item[aria-current="page"] { background:var(--hover); color:var(--accent); }
   button.item[aria-current="page"]::before { content:""; position:absolute; left:-6px; top:10px; bottom:10px; width:3px; border-radius:0 3px 3px 0; background:var(--accent); }
+  #splitClose[hidden] { display:none; }
+  button.item.second { background:var(--hover); box-shadow:inset 3px 0 0 var(--accent); }
   button.item.dragging { opacity:.4; }
   button.item.drop-before { box-shadow:0 -2px 0 0 var(--accent); }
   button.item.drop-after { box-shadow:0 2px 0 0 var(--accent); }
@@ -48,22 +50,6 @@
   #quick input { flex:1; min-width:0; background:var(--stage); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit; }
   #quick button { background:var(--accent); color:var(--on-accent); border:0; border-radius:8px; padding:0 12px; font-weight:600; cursor:pointer; }
 
-  #tree { flex:1; overflow:auto; padding:0 6px 16px; user-select:none; }
-  #tree[hidden] { display:none; }
-  .tn { display:flex; align-items:center; border-radius:6px; }
-  .tn:hover { background:var(--hover); }
-  .tn.sel { background:var(--accent-bg); }
-  .tn button { border:0; background:transparent; cursor:pointer; color:var(--fg); padding:5px 4px; border-radius:6px; }
-  .tn .chev { width:22px; flex:none; color:var(--muted); text-align:center; padding:5px 0; }
-  .tn .tname { flex:1; min-width:0; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .tn.file .tname { color:var(--muted); }
-  .tn.root .tname { font-weight:600; }
-  .tn.sel .tname { color:var(--fg); }
-  .tmsg { color:var(--muted); font-size:12px; padding:4px 8px; }
-  .tgrp { margin:12px 8px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
-  .tn .star { width:24px; flex:none; text-align:center; color:var(--muted); opacity:0; padding:5px 0; }
-  .tn:hover .star, .tn .star:focus-visible, .tn .star.on { opacity:1; }
-  .tn .star.on { color:var(--warn); }
 
   #header { position:fixed; top:0; right:0; height:var(--header-h); left:calc(var(--rail-w) + var(--feed-w)); display:flex; align-items:center; gap:8px; padding:0 var(--gap) 0 12px; }
   body.feed-closed #header { left:var(--rail-w); }
@@ -78,17 +64,6 @@
   #stage { position:fixed; top:var(--header-h); right:var(--gap); bottom:var(--gap); left:calc(var(--rail-w) + var(--feed-w) + var(--gap)); background:var(--stage); border:1px solid var(--line); border-radius:var(--radius); pointer-events:none; }
   body.feed-closed #stage { left:calc(var(--rail-w) + var(--gap)); }
   @media (prefers-reduced-motion: no-preference) { button.item, .hb, .fi { transition:background .12s, color .12s; } }
-  .ctx { position:fixed; z-index:50; min-width:220px; padding:6px; background:var(--card); border:1px solid var(--line-strong); border-radius:10px; box-shadow:var(--shadow); }
-  .ctx button { display:block; width:100%; text-align:left; border:0; background:transparent; color:var(--fg); font:inherit; border-radius:6px; padding:7px 10px; cursor:pointer; }
-  .ctx button:hover, .ctx button:focus-visible { background:var(--hover); outline:none; }
-  .ctx hr { border:0; border-top:1px solid var(--line); margin:5px 2px; }
-  .pmodal { position:fixed; inset:0; z-index:60; display:grid; place-items:center; background:rgba(0,0,0,.45); }
-  .pmodal .pbox { width:min(480px, calc(100vw - 40px)); background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow); color:var(--fg); }
-  .pmodal h2 { margin:0 0 4px; font-size:15px; }
-  .pmodal dl { display:grid; grid-template-columns:110px 1fr; gap:6px 12px; margin:12px 0 16px; }
-  .pmodal dt { color:var(--muted); }
-  .pmodal dd { margin:0; word-break:break-all; user-select:text; }
-  .pmodal button { font:inherit; color:var(--on-accent); background:var(--accent); border:1px solid var(--accent); border-radius:8px; padding:7px 16px; cursor:pointer; font-weight:600; }
 </style>
 </head>
 <body>
@@ -101,7 +76,6 @@
     <button type="submit">Add</button>
   </form>
   <div id="feedBody"></div>
-  <div id="tree" hidden role="group" aria-label="Folders"></div>
 </aside>
 
 <header id="header">
@@ -109,6 +83,7 @@
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
   </button>
   <div id="crumb"></div>
+  <button class="hb" id="splitClose" hidden aria-label="Close the second tab" title="Close the second tab (back to one tab)" style="width:auto;padding:0 10px;font-size:12.5px">Close split ✕</button>
   <button id="search" aria-label="Search and commands (Ctrl+K)"><svg viewBox="0 0 24 24" style="width:16px;height:16px"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span>Search…</span><kbd>Ctrl K</kbd></button>
   <button class="hb" id="themeBtn" aria-label="Switch between light and dark"></button>
   <button class="hb" id="reload" aria-label="Reload this section" title="Reload (Ctrl+R / F5)">
@@ -167,10 +142,10 @@
       else b.innerHTML = svg(s.icon);
       if (/^[a-z]{2,12}$/.test(s.icon || '')) b.style.setProperty('--ic', 'var(--ic-' + s.icon + ', var(--muted))');
       b.append(el('span', null, s.label.replace(/ \(.*\)$/, '')));
-      b.title = s.label + (i < 9 ? '  (Ctrl+' + (i + 1) + ' / Alt+' + (i + 1) + ' in web tabs)' : '') + '  — drag to move, or Alt+Shift+Up/Down';
+      b.title = s.label + (i < 9 ? '  (Ctrl+' + (i + 1) + ' / Alt+' + (i + 1) + ' in web tabs)' : '') + '  — drag to move, or Alt+Shift+Up/Down. Shift+click shows it beside the current tab';
       b.setAttribute('aria-label', s.label);
       if (s.type === 'disabled') b.disabled = true;
-      b.addEventListener('click', () => window.cc.select(s.id));
+      b.addEventListener('click', (ev) => (ev.shiftKey ? window.cc.selectBeside(s.id) : window.cc.select(s.id)));
       rail.append(b);
       buttons.set(s.id, b);
     });
@@ -199,7 +174,8 @@
   }
 
   function markCurrent() {
-    buttons.forEach((b, id) => { if (id === current) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    buttons.forEach((b, id) => { if (id === current) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); b.classList.toggle('second', id === secondTab); });
+    $('splitClose').hidden = !secondTab;
     const s = sections.find((x) => x.id === current);
     const crumb = $('crumb');
     crumb.replaceChildren(el('span', null, 'Transform Homes'), el('span', null, '/'), Object.assign(el('b'), { textContent: s ? s.label.replace(/ \(.*\)$/, '') : '' }));
@@ -252,215 +228,7 @@
     done.forEach((t) => item(proj(t.project) ? proj(t.project).name.slice(0, 8) : 'Done', t.title, () => window.cc.select('tasks'), true));
   }
 
-  function applyUi(ui) { document.body.classList.toggle('feed-closed', !(ui && ui.feedOpen)); if (typeof refreshRoots === 'function') refreshRoots(); }
-
-
-  // ---- folders (shown in the side panel while the Explorer is open) ----
-  const expanded = new Set();
-  const children = new Map();   // key -> entries | 'loading' | { error }
-  let sel = { project: null, path: '' };
-  let collapsing = null;       // the folder the user just collapsed by clicking its name, so opening it does not re-expand it
-  const tkey = (project, rel) => project + '\u0001' + rel;
-  const joinPath = (a, b) => (a ? a + '/' + b : b);
-
-  function addNode(parent, project, rel, label, isDir, depth) {
-    const k = tkey(project, rel);
-    const open = expanded.has(k);
-    const selected = sel.project === project && sel.path === rel;
-    const row = el('div', 'tn' + (selected ? ' sel' : '') + (isDir ? '' : ' file') + (depth === 0 ? ' root' : ''));
-    row.style.paddingLeft = (4 + depth * 14) + 'px';
-    const chev = el('button', 'chev', isDir ? (open ? '▾' : '▸') : '');
-    if (isDir) {
-      chev.setAttribute('aria-label', (open ? 'Collapse ' : 'Expand ') + label);
-      chev.setAttribute('aria-expanded', open ? 'true' : 'false');
-      chev.addEventListener('click', () => toggle(project, rel));
-    } else { chev.disabled = true; chev.tabIndex = -1; chev.setAttribute('aria-hidden', 'true'); }
-    const name = el('button', 'tname', label);
-    name.title = label;
-    if (selected) name.setAttribute('aria-current', 'true');
-    name.addEventListener('click', () => {
-      // Clicking a folder's name opens it and expands it; clicking it again collapses it.
-      if (isDir) { if (expanded.has(k)) { collapsing = k; toggle(project, rel); } else toggle(project, rel, true); }
-      window.cc.navigate({ section: 'projects', project, path: rel });
-    });
-    row.append(chev, name);
-    row.addEventListener('contextmenu', (e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, project, rel, isDir, label); });
-    if (isDir && rel !== '') {
-      const pinned = isFav(project, rel);
-      const star = el('button', 'star' + (pinned ? ' on' : ''), pinned ? '★' : '☆');
-      star.title = pinned ? 'Remove from favourites' : 'Add to favourites';
-      star.setAttribute('aria-label', (pinned ? 'Remove from favourites: ' : 'Add to favourites: ') + label);
-      star.addEventListener('click', () => window.cc.toggleFav(project, rel, label));
-      row.append(star);
-    }
-    parent.append(row);
-    if (isDir && open) {
-      const kids = children.get(k);
-      if (kids === 'loading' || kids === undefined) parent.append(Object.assign(el('div', 'tmsg', 'Loading…'), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
-      else if (!Array.isArray(kids)) parent.append(Object.assign(el('div', 'tmsg', kids.error), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
-      else if (!kids.length) parent.append(Object.assign(el('div', 'tmsg', 'Empty'), { style: 'padding-left:' + (30 + depth * 14) + 'px' }));
-      else kids.forEach((en) => addNode(parent, project, joinPath(rel, en.name), en.name, en.dir, depth + 1));
-    }
-  }
-
-  // ---- Right-click menu for folders and files in the Explorer side panel ----
-  let menuEl = null;
-  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
-  function closeProps() { const m = document.getElementById('propsModal'); if (m) m.remove(); }
-  function sideNote(ok, text) {
-    const m = el('div', 'tmsg', text);
-    if (!ok) m.style.color = 'var(--danger)';
-    $('tree').prepend(m);
-    setTimeout(() => m.remove(), 5000);
-  }
-  async function showProps(project, rel) {
-    const r = await window.cc.getProperties(project, rel);
-    if (!r || !r.ok) { sideNote(false, (r && r.error) || 'Could not read the properties.'); return; }
-    const when = (ms) => (ms ? new Date(ms).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Unknown');
-    const size = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-    const rows = [['Name', r.name], ['Type', r.kind === 'folder' ? 'Folder' : (r.type ? r.type + ' file' : 'File')], ['Location', r.path],
-      r.kind === 'folder' ? ['Contains', r.items == null ? 'Unknown' : r.items + (r.items === 1 ? ' item' : ' items')] : ['Size', size(r.size) + ' (' + r.size.toLocaleString('en-AU') + ' bytes)'],
-      ['Created', when(r.created)], ['Modified', when(r.modified)], ['Opened', when(r.accessed)], ['Read-only', r.readOnly ? 'Yes' : 'No']];
-    closeProps();
-    const modal = el('div', 'pmodal'); modal.id = 'propsModal';
-    const box = el('div', 'pbox'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Properties');
-    const dl = el('dl');
-    rows.forEach(([k, v]) => { dl.append(el('dt', null, k), el('dd', null, String(v))); });
-    const close = el('button', null, 'Close'); close.type = 'button'; close.addEventListener('click', closeProps);
-    box.append(el('h2', null, 'Properties'), dl, close);
-    modal.append(box);
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeProps(); });
-    document.body.append(modal);
-    close.focus();
-  }
-  function openMenu(x, y, project, rel, isDir, label) {
-    closeMenu();
-    const act = async (fn, okText) => { const r = await fn(); sideNote(!!(r && r.ok), r && r.ok ? okText : ((r && r.error) || 'Could not do that.')); };
-    const item = (text, fn) => { const b = el('button', null, text); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.addEventListener('click', () => { closeMenu(); fn(); }); return b; };
-    const items = [];
-    if (isDir) {
-      items.push(item('Open', () => { toggle(project, rel, true); window.cc.navigate({ section: 'projects', project, path: rel }); }));
-      items.push(item('Open in File Explorer', () => act(() => window.cc.openFile(project, rel), 'Opened in File Explorer.')));
-    } else {
-      items.push(item('Open', () => act(() => window.cc.openFile(project, rel), 'Opened.')));
-      items.push(item('Show in File Explorer', () => act(() => window.cc.revealFile(project, rel), 'Shown in File Explorer.')));
-    }
-    items.push(el('hr'));
-    items.push(item('Open in PowerShell here', () => act(() => window.cc.openPowerShell(project, rel), 'Opened PowerShell.')));
-    items.push(item('Copy path', () => act(() => window.cc.copyPath(project, rel), 'Path copied.')));
-    if (isDir && rel) { const pinned = isFav(project, rel); items.push(item(pinned ? 'Remove from favourites' : 'Add to favourites', () => window.cc.toggleFav(project, rel, label))); }
-    items.push(el('hr'));
-    items.push(item('Properties', () => showProps(project, rel)));
-    const menu = el('div', 'ctx'); menu.setAttribute('role', 'menu');
-    menu.append(...items);
-    document.body.append(menu);
-    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + 'px';
-    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + 'px';
-    menuEl = menu;
-    const first = menu.querySelector('button'); if (first) first.focus();
-  }
-  document.addEventListener('click', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
-  window.addEventListener('blur', closeMenu);
-  window.addEventListener('resize', closeMenu);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { if (menuEl) { closeMenu(); e.preventDefault(); } else if (document.getElementById('propsModal')) { closeProps(); e.preventDefault(); } return; }
-    if (menuEl && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      const b = [...menuEl.querySelectorAll('button')]; const i = b.indexOf(document.activeElement);
-      b[(i + (e.key === 'ArrowDown' ? 1 : -1) + b.length) % b.length].focus(); e.preventDefault();
-    }
-  });
-
-  let roots = { projects: [], drives: [], favs: [], apps: [] };
-  const isFav = (project, rel) => roots.favs.some((f) => f.root === project && f.rel === rel);
-
-  function renderTree() {
-    const t = $('tree');
-    t.replaceChildren();
-    t.append(el('div', 'tgrp', 'Favourites'));
-    if (!roots.projects.length && !roots.favs.length) t.append(el('div', 'tmsg', 'Click the star next to a folder to keep it here.'));
-    roots.projects.forEach((p) => addNode(t, p.id, '', p.name, true, 0));
-    roots.favs.forEach((f) => addNode(t, f.root, f.rel, f.name, true, 0));
-    t.append(el('div', 'tgrp', 'This PC'));
-    if (!roots.drives.length) t.append(el('div', 'tmsg', 'No drives are set up. Add them under "explorer" in the settings file.'));
-    roots.drives.forEach((d) => addNode(t, d.id, '', d.name, true, 0));
-    if ((roots.apps || []).length) {
-      t.append(el('div', 'tgrp', 'Apps'));
-      roots.apps.forEach((a) => {
-        const row = el('div', 'tn');
-        row.style.paddingLeft = '4px';
-        const b = el('button', 'tname', a.name);
-        b.style.paddingLeft = '26px';
-        b.title = 'Open ' + a.name;
-        b.addEventListener('click', async () => {
-          const r = await window.cc.launchApp(a.id);
-          if (!r || !r.ok) { const m = el('div', 'tmsg', (r && r.error) || 'Could not start ' + a.name + '.'); row.after(m); setTimeout(() => m.remove(), 6000); }
-        });
-        row.append(b);
-        t.append(row);
-      });
-    }
-  }
-
-  async function refreshRoots() {
-    roots = (await window.cc.getRoots()) || roots;
-    if (current === 'projects') renderTree();
-  }
-
-  async function loadDir(project, rel) {
-    const k = tkey(project, rel);
-    children.set(k, 'loading');
-    renderTree();
-    const r = await window.cc.listDir(project, rel);
-    children.set(k, r && r.ok && !r.isFile ? r.entries : (r && r.ok ? [] : { error: (r && r.error) || 'Could not open.' }));
-    renderTree();
-  }
-
-  function toggle(project, rel, forceOpen) {
-    const k = tkey(project, rel);
-    if (expanded.has(k) && !forceOpen) { expanded.delete(k); renderTree(); return; }
-    expanded.add(k);
-    if (!Array.isArray(children.get(k))) loadDir(project, rel); else renderTree();
-  }
-
-  // Open the folders leading to a place, mark it, and expand it if it is a folder.
-  async function reveal(project, path) {
-    sel = { project, path };
-    const keepClosed = collapsing === tkey(project, path);
-    collapsing = null;
-    const segs = path ? path.split('/') : [];
-    let rel = '';
-    if (!path && keepClosed) { renderTree(); return; }
-    expanded.add(tkey(project, ''));
-    if (!Array.isArray(children.get(tkey(project, '')))) await loadDir(project, '');
-    for (let i = 0; i < segs.length - 1; i++) {
-      rel = joinPath(rel, segs[i]);
-      expanded.add(tkey(project, rel));
-      if (!Array.isArray(children.get(tkey(project, rel)))) await loadDir(project, rel);
-    }
-    if (path && !keepClosed) {
-      const r = await window.cc.listDir(project, path);
-      if (r && r.ok && !r.isFile) {
-        expanded.add(tkey(project, path));
-        if (!Array.isArray(children.get(tkey(project, path)))) await loadDir(project, path);
-      }
-    }
-    renderTree();
-  }
-
-  function updatePanelMode() {
-    const tree = current === 'projects';
-    $('feedTitle').textContent = tree ? 'Explorer' : 'Recent activity';
-    $('quick').style.display = tree ? 'none' : '';
-    $('feedBody').style.display = tree ? 'none' : '';
-    $('tree').hidden = !tree;
-    if (tree) {
-      children.clear();
-      renderTree();
-      [...expanded].forEach((k) => { const [p, r] = k.split('\u0001'); loadDir(p, r); });
-    }
-  }
-
-  window.cc.onNav((n) => { if (n && n.section === 'projects' && n.project) reveal(n.project, n.path || ''); });
+  function applyUi(ui) { document.body.classList.toggle('feed-closed', !(ui && ui.feedOpen)) }
 
 
   // ---- light / dark ----
@@ -503,7 +271,10 @@
     if (next) { data = next; renderFeed(); }
   });
 
-  window.cc.onSelected((id) => { current = id; markCurrent(); updatePanelMode(); });
+  let secondTab = null;
+  window.cc.onSplit((id) => { secondTab = id || null; markCurrent(); });
+  $('splitClose').addEventListener('click', () => window.cc.closeSplit());
+  window.cc.onSelected((id) => { current = id; markCurrent(); });
   window.cc.onUi(applyUi);
   window.cc.onFavicons((f) => { favicons = f || {}; if (sections.length) { buildRail(); markCurrent(); } });
   window.cc.onTodo((t) => { todo = { enabled: true, ...t }; renderFeed(); });
@@ -520,8 +291,6 @@
     current = await window.cc.getCurrent();
     markCurrent();
     projects = (await window.cc.getProjects()) || [];
-    await refreshRoots();
-    updatePanelMode();
     data = (await window.cc.getData()) || data;
     feeds = (await window.cc.getFeeds()) || feeds;
     renderFeed();
