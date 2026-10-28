@@ -5,7 +5,7 @@ const fs = require('fs');
 const { createStore } = require('./store');
 const { createFeedService, validFeeds } = require('./feeds');
 const { createUiState } = require('./uistate');
-const { createTodoSync } = require('./todo');
+const { createTodoSync, completeSource, EXTRACT_SOURCE: TODO_SOURCE } = require('./todo');
 const { createDrmd } = require('./drmd');
 const { createBrowser } = require('./browser');
 const { createOutlook } = require('./outlook');
@@ -16,7 +16,7 @@ const { createFileSearch } = require('./filesearch');
 const { createRecent } = require('./recent');
 const { listBackups, restoreBackup } = require('./backups');
 const { execFile } = require('child_process');
-const { nativeTheme, nativeImage } = require('electron');
+const { nativeTheme, nativeImage, screen } = require('electron');
 
 // Same data folder whether started with "npm start" or from the installer.
 if (!process.argv.some((a) => a.startsWith('--user-data-dir'))) {
@@ -48,6 +48,7 @@ let sections = [];
 const views = new Map(); // id -> WebContentsView
 let currentId = null;
 let previousId = null; // the tab you were on before this one (Alt+Q goes back to it)
+let secondId = null;   // a second tab shown beside the current one (Shift+click a tab in the rail)
 let loadedConfig = null;
 let store = null;
 let feedService = null;
@@ -211,6 +212,17 @@ const isBlockedName = (n) => { const l = String(n).toLowerCase(); return BLOCK_N
 const IMAGE_ICON_EXT = /\.(png|ico|jpe?g)$/i;
 const validIconPath = (p) => typeof p === 'string' && p.length <= 300 && path.isAbsolute(p) && (IMAGE_ICON_EXT.test(p) || /\.exe$/i.test(p));
 const MAX_APPS = 24;
+// Well-known programs get a friendly name and the file types they open, so the right-click "Open in Excel" and "Open in Word" work without any setup.
+// A list of "types" in the settings file for that app replaces these. Macro-enabled files (.xlsm, .docm) are left out on purpose.
+const KNOWN_APPS = {
+  excel: { label: 'Excel', types: ['.xlsx', '.xls', '.xlsb', '.csv', '.tsv', '.xltx', '.xlt', '.ods'] },
+  winword: { label: 'Word', types: ['.docx', '.doc', '.dotx', '.dot', '.rtf', '.odt'] },
+  powerpnt: { label: 'PowerPoint', types: ['.pptx', '.ppt', '.ppsx', '.potx', '.odp'] },
+  acrobat: { label: 'Acrobat', types: ['.pdf'] },
+  acrord32: { label: 'Acrobat Reader', types: ['.pdf'] },
+  'notepad++': { label: 'Notepad++', types: ['.txt', '.md', '.json', '.log', '.xml', '.csv', '.js', '.css', '.html', '.ini', '.yml', '.yaml'] },
+};
+const knownApp = (p) => KNOWN_APPS[path.basename(String(p)).replace(/\.exe$/i, '').toLowerCase()] || null;
 const appIdFor = (name) => 'app:' + (String(name).trim().slice(0, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app');
 function appList() {
   const raw = loadedConfig && Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
@@ -222,9 +234,11 @@ function appList() {
     const id = appIdFor(name);
     if (seen.has(id)) continue;
     seen.add(id);
-    const types = (Array.isArray(a.types) ? a.types : []).filter((t) => typeof t === 'string' && /^\.[a-z0-9]{1,8}$/i.test(t)).map((t) => t.toLowerCase()).slice(0, 20);
+    let types = (Array.isArray(a.types) ? a.types : []).filter((t) => typeof t === 'string' && /^\.[a-z0-9]{1,8}$/i.test(t)).map((t) => t.toLowerCase()).slice(0, 20);
+    const known = knownApp(a.path);
+    if (!types.length && known) types = known.types.slice();
     const icon = validIconPath(a.icon) ? a.icon : null;
-    out.push({ id, name, path: a.path, types, icon });
+    out.push({ id, name, label: known ? known.label : name, path: a.path, types, icon });
   }
   return out;
 }
@@ -358,7 +372,186 @@ function startApp(id, fileArg) {
 }
 
 
-// ---- Project file browser (read-only) ----------------------------------------------------------
+// ---- Moving, copying and dropping files (Explorer drag and drop) ----
+// Nothing is ever overwritten (a name clash gets "(2)"), a folder cannot be put inside itself, and every destination is resolved inside a known folder or drive.
+const sameOrInside = (child, parent) => {
+  const n = (x) => (process.platform === 'win32' ? x.toLowerCase() : x);
+  const c = n(child), p = n(parent);
+  return c === p || c.startsWith(p.endsWith(path.sep) ? p : p + path.sep);
+};
+function freeName(dir, name) {
+  if (!fs.existsSync(path.join(dir, name))) return name;
+  const ext = path.extname(name);
+  const base = ext && name.length > ext.length ? name.slice(0, -ext.length) : name;
+  const tail = base === name ? '' : ext;
+  for (let i = 2; i < 1000; i++) { const n = base + ' (' + i + ')' + tail; if (!fs.existsSync(path.join(dir, n))) return n; }
+  return null;
+}
+function copyOrMove(srcReal, dstDirReal, copy) {
+  let st;
+  try { st = fs.lstatSync(srcReal); } catch { return { ok: false, error: 'That item was not found.' }; }
+  if (st.isSymbolicLink()) return { ok: false, error: 'Shortcuts and links are not moved or copied from here.' };
+  if (st.isDirectory() && sameOrInside(dstDirReal, srcReal)) return { ok: false, error: 'A folder cannot be put inside itself.' };
+  if (!copy && sameOrInside(path.dirname(srcReal), dstDirReal) && sameOrInside(dstDirReal, path.dirname(srcReal))) return { ok: true, same: true };
+  const name = freeName(dstDirReal, path.basename(srcReal));
+  if (!name) return { ok: false, error: 'Too many items with that name in the destination.' };
+  const target = path.join(dstDirReal, name);
+  const cp = () => fs.cpSync(srcReal, target, { recursive: true, errorOnExist: true, force: false, dereference: false });
+  try {
+    if (copy) cp();
+    else {
+      try { fs.renameSync(srcReal, target); }
+      catch (err) { if (err.code !== 'EXDEV') throw err; cp(); fs.rmSync(srcReal, { recursive: true, force: false }); } // another drive: copy, then remove the original
+    }
+  } catch (err) {
+    return { ok: false, error: 'Could not ' + (copy ? 'copy' : 'move') + ' ' + path.basename(srcReal) + (err && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES') ? ': it is in use or protected.' : '.') };
+  }
+  return { ok: true, name };
+}
+let dragIcon = null;
+function dragIconImage() {
+  if (dragIcon) return dragIcon;
+  let img = nativeImage.createFromPath(logoPath());
+  if (!img.isEmpty()) img = img.resize({ width: 32, height: 32 });
+  if (img.isEmpty()) img = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+  return (dragIcon = img);
+}
+
+// ---- Side by side: Workstation on the left half of the screen, a program from your Apps list on the right half ----
+// The program's own window is moved with a short PowerShell step (the program name goes in through the environment, never into the script).
+const SNAP_SCRIPT = "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class THW { [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int c); [DllImport(\"user32.dll\")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int t, uint f); [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); }'; "
+  + "$end = (Get-Date).AddSeconds(20); while ((Get-Date) -lt $end) { $p = Get-Process -Name $env:TH_PROC -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1; "
+  + "if ($p) { [THW]::ShowWindow($p.MainWindowHandle, 9) | Out-Null; [THW]::SetWindowPos($p.MainWindowHandle, [IntPtr]::Zero, [int]$env:TH_X, [int]$env:TH_Y, [int]$env:TH_W, [int]$env:TH_H, 68) | Out-Null; [THW]::SetForegroundWindow($p.MainWindowHandle) | Out-Null; 'ok'; exit } Start-Sleep -Milliseconds 400 } 'timeout'";
+let layoutBefore = null; // Workstation's size and place before it was snapped, so Restore can put it back
+function snapRects() {
+  const wa = screen.getDisplayMatching(win.getBounds()).workArea;
+  const half = Math.floor(wa.width / 2);
+  const left = { x: wa.x, y: wa.y, width: half, height: wa.height };
+  const right = { x: wa.x + half, y: wa.y, width: wa.width - half, height: wa.height };
+  const phys = process.platform === 'win32' && typeof screen.dipToScreenRect === 'function' ? screen.dipToScreenRect(win, right) : right;
+  return { left, right: phys };
+}
+async function snapApp(id) {
+  const a = appList().find((x) => x.id === id);
+  if (!a) return { ok: false, error: 'Unknown app.' };
+  if (process.platform !== 'win32' && !outlookRun) return { ok: false, error: 'Side by side is only available on Windows.' };
+  if (!win || win.isDestroyed()) return { ok: false, error: 'No window.' };
+  const proc = path.basename(a.path).replace(/\.exe$/i, '');
+  if (!/^[\w .+-]{1,60}$/.test(proc)) return { ok: false, error: 'This program cannot be placed side by side.' };
+  const started = startApp(id, null);
+  if (!started.ok) return started;
+  if (!layoutBefore) layoutBefore = { bounds: win.getBounds(), maximized: win.isMaximized(), fullScreen: win.isFullScreen() };
+  if (win.isFullScreen()) win.setFullScreen(false);
+  if (win.isMaximized()) win.unmaximize();
+  if (win.isMinimized()) win.restore();
+  const { left, right } = snapRects();
+  win.setBounds(left);
+  const out = await new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', SNAP_SCRIPT],
+      { timeout: 30000, windowsHide: true, env: { ...process.env, TH_PROC: proc, TH_X: String(right.x), TH_Y: String(right.y), TH_W: String(right.width), TH_H: String(right.height) } },
+      (err, stdout) => resolve(err ? '' : String(stdout || '').trim()));
+  });
+  if (out !== 'ok') return { ok: true, snapped: true, note: a.name + ' did not show a window in time, so only Workstation was resized. Try Shift+click again once it has opened.' };
+  return { ok: true, snapped: true };
+}
+function restoreLayout() {
+  if (!layoutBefore || !win || win.isDestroyed()) return { ok: true };
+  win.setBounds(layoutBefore.bounds);
+  if (layoutBefore.maximized) win.maximize();
+  layoutBefore = null;
+  return { ok: true };
+}
+
+// ---- Open a file in Word / Excel / PowerPoint on the web ----
+// The file is copied into your OneDrive "My files > Documents" folder (through your signed-in Microsoft session, using SharePoint's own upload
+// call from a hidden window), then opened in the matching web tab. Nothing is overwritten: a name clash gets "(2)".
+const WEB_APPS = { '.xlsx': 'excel', '.xls': 'excel', '.xlsb': 'excel', '.csv': 'excel', '.xltx': 'excel', '.docx': 'word', '.doc': 'word', '.dotx': 'word', '.rtf': 'word', '.pptx': 'powerpoint', '.ppt': 'powerpoint' };
+const WEB_MAX_BYTES = 25 * 1024 * 1024;
+async function uploadInPage(b64, name, folderRel, siteUrl) {
+  const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const json = { Accept: 'application/json;odata=verbose' };
+  const ci = await fetch(siteUrl + '/_api/contextinfo', { method: 'POST', headers: json, credentials: 'include' });
+  if (!ci.ok) return { ok: false, error: 'Microsoft would not let this window upload (is the OneDrive tab signed in?).' };
+  const digest = (await ci.json()).d.GetContextWebInformation.FormDigestValue;
+  const clean = String(name).replace(/[#%&*{}\\:<>?\/|"~]/g, '_');
+  const dot = clean.lastIndexOf('.');
+  const stem = dot > 0 ? clean.slice(0, dot) : clean, ext = dot > 0 ? clean.slice(dot) : '';
+  for (let i = 1; i <= 20; i++) {
+    const n = i === 1 ? clean : stem + ' (' + i + ')' + ext;
+    const url = siteUrl + "/_api/web/GetFolderByServerRelativeUrl('" + folderRel.replace(/'/g, "''") + "')/Files/add(url='" + n.replace(/'/g, "''") + "',overwrite=false)";
+    const r = await fetch(url, { method: 'POST', headers: { ...json, 'X-RequestDigest': digest }, body: bin, credentials: 'include' });
+    if (r.ok) { const d = (await r.json()).d; return { ok: true, name: n, uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl }; }
+    const text = await r.text();
+    if (!/2130575257|already exists/i.test(text)) return { ok: false, error: 'OneDrive refused the upload (' + r.status + ').' };
+  }
+  return { ok: false, error: 'Too many files with that name in OneDrive Documents.' };
+}
+async function openInWeb(rootId, rel) {
+  const r = resolveInProject(rootId, rel);
+  if (r.error) return { ok: false, error: r.error };
+  const ext = path.extname(r.real).toLowerCase();
+  const kind = WEB_APPS[ext];
+  if (!kind) return { ok: false, error: 'That type of file cannot be opened in Office on the web.' };
+  let st;
+  try { st = fs.statSync(r.real); } catch { return { ok: false, error: 'Not found.' }; }
+  if (!st.isFile()) return { ok: false, error: 'Pick a file.' };
+  if (st.size > WEB_MAX_BYTES) return { ok: false, error: 'That file is larger than 25 MB. Upload it in the OneDrive tab instead.' };
+  const b64 = fs.readFileSync(r.real).toString('base64');
+  const w = new BrowserWindow({ show: false, width: 900, height: 700, skipTaskbar: true, webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  let site = null, up = null, seen = '';
+  const siteFrom = (href) => {
+    try {
+      const u = new URL(href);
+      const m = /^\/personal\/([^/]+)/i.exec(u.pathname);
+      if (/\.sharepoint\.com$/i.test(u.hostname) && m) return { origin: u.origin, path: '/personal/' + m[1] };
+    } catch { /* not a URL */ }
+    return null;
+  };
+  try {
+    const wc = w.webContents;
+    wc.setUserAgent(chromeUserAgent());
+    wc.setAudioMuted(true);
+    // 1. The OneDrive tab, if it has already been opened and is showing your files, tells us where your OneDrive lives.
+    const odSec = sections.find((x) => x.type === 'web' && /onedrive/i.test(x.label));
+    const odView = odSec && views.get(odSec.id);
+    if (odView && !odView.webContents.isDestroyed()) { site = siteFrom(odView.webContents.getURL()); if (!site) seen = hostOf(odView.webContents.getURL()); }
+    // 2. Otherwise ask Microsoft, in a hidden window, where "OneDrive" goes.
+    if (!site) {
+      for (const start of ['https://www.office.com/launch/onedrive', 'https://www.microsoft365.com/launch/onedrive']) {
+        wc.loadURL(start).catch(() => { /* redirects can abort the first load */ });
+        const t0 = Date.now();
+        while (Date.now() - t0 < 30000) {
+          await new Promise((res) => setTimeout(res, 800));
+          const href = wc.getURL();
+          seen = hostOf(href) || seen;
+          site = siteFrom(href);
+          if (site) break;
+          if (/^login\.(microsoftonline|live)\.com$/i.test(hostOf(href)) && Date.now() - t0 > 12000) return { ok: false, error: 'Please sign in to Microsoft in the OneDrive or Inbox tab first, then try again.' };
+        }
+        if (site) break;
+      }
+    }
+    if (!site) return { ok: false, error: 'Could not find your OneDrive address (Microsoft ended on ' + (seen || 'no page') + '). Open the OneDrive tab and show My files, then try again.' };
+    if (hostOf(wc.getURL()) !== hostOf(site.origin)) {
+      // The upload runs from a page on your own SharePoint address, so the hidden window has to be there.
+      await wc.loadURL(site.origin + site.path + '/_layouts/15/onedrive.aspx').catch(() => { /* the page may redirect */ });
+      if (hostOf(wc.getURL()) !== hostOf(site.origin)) return { ok: false, error: 'Could not open your OneDrive (Microsoft sent the window to ' + (hostOf(wc.getURL()) || 'no page') + '). Sign in again in the OneDrive tab and retry.' };
+    }
+    up = await wc.executeJavaScript('(' + uploadInPage.toString() + ')(' + [b64, path.basename(r.real), site.path + '/Documents', site.origin + site.path].map((x) => JSON.stringify(x)).join(',') + ')');
+  } catch { return { ok: false, error: 'Could not send the file to OneDrive.' }; }
+  finally { if (!w.isDestroyed()) w.destroy(); }
+  if (!up || !up.ok) return { ok: false, error: (up && up.error) || 'Could not send the file to OneDrive.' };
+  const url = site.origin + site.path + '/_layouts/15/Doc.aspx?sourcedoc=%7B' + encodeURIComponent(up.uniqueId) + '%7D&file=' + encodeURIComponent(up.name) + '&action=default&mobileredirect=true';
+  const label = { excel: /excel/i, word: /word/i, powerpoint: /power ?point/i }[kind];
+  const sec = sections.find((x) => x.type === 'web' && label.test(x.label));
+  if (!sec) { openInBrowserTab(url); return { ok: true, name: up.name }; }
+  if (currentId !== sec.id) selectBeside(sec.id);
+  const v = views.get(sec.id);
+  if (v && !v.webContents.isDestroyed()) v.webContents.loadURL(url).catch(() => { /* the page shows its own error */ });
+  return { ok: true, name: up.name };
+}
+
+// ---- Project file browser ----------------------------------------------------------
 // Everything is resolved inside a configured project folder: no "..", no symlinks out, no drive letters.
 const HIDE_NAMES = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', '$RECYCLE.BIN', 'System Volume Information', '.DS_Store', 'Thumbs.db']);
 const RISKY_EXT = new Set(['.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.msp', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.mjs', '.wsf', '.wsh', '.hta', '.lnk', '.url', '.reg', '.jar', '.cpl', '.dll', '.sh', '.appx', '.msix', '.application', '.pif']);
@@ -473,7 +666,43 @@ function ensureTodoView() {
   return todoView;
 }
 
-async function scrapeTodo(routes, source) {
+let todoLock = Promise.resolve();
+function withTodoLock(fn) {
+  const run = todoLock.then(fn, fn);
+  todoLock = run.catch(() => {});
+  return run;
+}
+function scrapeTodo(routes, source) { return withTodoLock(() => scrapeTodoNow(routes, source)); }
+
+// Ticks one open task in Microsoft To Do by driving the same signed-in page the reader uses.
+function completeTodo(title) {
+  return withTodoLock(async () => {
+    if (!win || win.isDestroyed()) return { ok: false, error: 'The window is not ready.' };
+    const wc = ensureTodoView().webContents;
+    try {
+      await wc.loadURL(process.env.CC_TEST_SCRIPT && process.env.CC_TEST_TODO_URL ? process.env.CC_TEST_TODO_URL : 'https://to-do.office.com/tasks/inbox');
+      const src = completeSource(title);
+      const started = Date.now();
+      let r = null;
+      while (Date.now() - started < 20000) {
+        await new Promise((res) => setTimeout(res, 1500));
+        r = await wc.executeJavaScript(src);
+        if (r && (r.state === 'signin' || r.clicked)) break;
+      }
+      if (!r || r.state === 'signin') return { ok: false, error: 'Please sign in to Microsoft in the Inbox tab first.' };
+      if (!r.clicked) return { ok: false, error: 'Could not find that task in Microsoft To Do. It may be on another list or already ticked.' };
+      await new Promise((res) => setTimeout(res, 2000));
+      const after = await wc.executeJavaScript(TODO_SOURCE);
+      const still = after && (after.tasks || []).some((t) => !t.done && t.title.slice(0, 300) === String(title).slice(0, 300));
+      if (still) return { ok: false, error: 'Microsoft did not confirm the tick. Please check To Do.' };
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not reach Microsoft To Do.' };
+    }
+  });
+}
+
+async function scrapeTodoNow(routes, source) {
   if (!win || win.isDestroyed()) throw new Error('no window');
   const wc = ensureTodoView().webContents;
   const results = [];
@@ -683,10 +912,43 @@ function idleCheck(idleSeconds) {
   return false;
 }
 
+// Two tabs side by side: the current tab on the left, the second tab on the right
+function splitRects() {
+  if (!win || !secondId || !views.has(secondId)) return null;
+  const b = stageBounds();
+  const w = Math.max(0, Math.floor((b.width - GAP) / 2));
+  return { a: { ...b, width: w }, b: { ...b, x: b.x + w + GAP, width: Math.max(0, b.width - w - GAP) } };
+}
+function notifySplit() { if (win && !win.isDestroyed()) win.webContents.send('cc:split', secondId); }
+function closeSecond() {
+  if (!secondId) return;
+  const v = views.get(secondId);
+  if (v && win && !win.isDestroyed()) { try { win.contentView.removeChildView(v); } catch { /* already gone */ } }
+  secondId = null;
+  layout();
+  notifySplit();
+}
+function selectBeside(id) {
+  const section = sections.find((x) => x.id === id);
+  if (!win || !section || section.type === 'disabled' || section.type === 'browser' || !currentId || id === currentId) return false;
+  if (isBrowserSection(currentId)) { select(id); return true; } // the Browser tab cannot be split; just go there
+  if (secondId && secondId !== id && views.has(secondId)) { try { win.contentView.removeChildView(views.get(secondId)); } catch { /* already gone */ } }
+  if (!views.has(id)) views.set(id, createView(section));
+  secondId = id;
+  win.contentView.addChildView(views.get(id));
+  if (paletteOpen && paletteView) win.contentView.addChildView(paletteView);
+  if (locked) raiseLock();
+  layout();
+  notifySplit();
+  return true;
+}
+
 function layout() {
   if (!win) return;
   if (locked) raiseLock();
-  if (currentId && views.has(currentId)) { views.get(currentId).setBounds(stageBounds()); if (isBrowserSection(currentId)) browserService.layout(); }
+  const sp = splitRects();
+  if (currentId && views.has(currentId)) { views.get(currentId).setBounds(sp ? sp.a : stageBounds()); if (isBrowserSection(currentId)) browserService.layout(); }
+  if (sp) views.get(secondId).setBounds(sp.b);
   if (paletteOpen && paletteView) paletteView.setBounds(paletteBounds());
 }
 
@@ -735,7 +997,6 @@ function createView(section) {
     localContentsIds.add(wc.id);
     wc.once('destroyed', () => localContentsIds.delete(wc.id));
   }
-
   if (section.type === 'drmd') {
     drmdContentsIds.add(wc.id);
     wc.once('destroyed', () => drmdContentsIds.delete(wc.id));
@@ -814,6 +1075,8 @@ function deliverParams(view, params) {
 function select(id, params) {
   const section = sections.find((x) => x.id === id);
   if (!section || section.type === 'disabled' || !win) return;
+  if (section.type === 'browser') closeSecond();           // the Browser tab always has the whole area
+  else if (id === secondId) { secondId = null; notifySplit(); } // the tab on the right becomes the main one
 
   if (currentId && currentId !== id && views.has(currentId)) {
     if (isBrowserSection(currentId)) browserService.detach();
@@ -829,6 +1092,7 @@ function select(id, params) {
   if (locked) raiseLock();
   if (currentId && currentId !== id) previousId = currentId;
   currentId = id;
+  if (secondId) layout();
   win.webContents.send('cc:selected', id);
   if (params) deliverParams(view, params);
   if (!paletteOpen) { if (section.type === 'browser') browserService.focusContent(); else view.webContents.focus(); }
@@ -1170,6 +1434,9 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('cc:sections', (e) => (isLocalSender(e) ? sections.map((x) => ({ id: x.id, label: x.label, icon: x.icon, type: x.type })) : []));
     ipcMain.on('cc:back', (e) => { if (isLocalSender(e)) goBackSection(); });
     ipcMain.on('cc:select', (e, id) => { if (isLocalSender(e) && typeof id === 'string') select(id); });
+    ipcMain.on('cc:select-beside', (e, id) => { if (isLocalSender(e) && typeof id === 'string') selectBeside(id); });
+    ipcMain.on('cc:close-split', (e) => { if (isLocalSender(e)) closeSecond(); });
+    ipcMain.handle('cc:split-state', (e) => (isLocalSender(e) ? secondId : null));
     ipcMain.on('cc:navigate', (e, p) => {
       if (!isLocalSender(e) || !p || typeof p.section !== 'string') return;
       const params = {};
@@ -1183,7 +1450,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!isLocalSender(e)) return null;
       const projects = (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
       const favs = ui.get().favs.filter((f) => findRoot(f.root));
-      return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, types: x.types })) };
+      return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, label: x.label, types: x.types })) };
     });
     ipcMain.handle('explorer:fav', (e, root, rel, name) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
@@ -1250,6 +1517,9 @@ if (!app.requestSingleInstanceLock()) {
       try { updateConfigFile((cfg) => { cfg.apps = next; }, 'config.before-reorder.bak.json'); loadedConfig.apps = next; } catch { return { ok: false, error: 'Could not save your settings file.' }; }
       return { ok: true };
     });
+    ipcMain.handle('app:snap', (e, id) => (isLocalSender(e) && typeof id === 'string' ? snapApp(id) : { ok: false, error: 'Not allowed.' }));
+    ipcMain.handle('app:restore-layout', (e) => (isLocalSender(e) ? restoreLayout() : { ok: false }));
+    ipcMain.handle('app:layout-state', (e) => (isLocalSender(e) ? { snapped: !!layoutBefore } : null));
     ipcMain.handle('app:launch', (e, id) => (isLocalSender(e) && typeof id === 'string' ? startApp(id, null) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('app:open-with', (e, id, root, rel) => {
       if (!isLocalSender(e) || typeof id !== 'string') return { ok: false, error: 'Not allowed.' };
@@ -1317,6 +1587,42 @@ if (!app.requestSingleInstanceLock()) {
         try { const names = fs.readdirSync(r.real); out.items = names.length; } catch { out.items = null; }
       } else { out.size = st.size; out.type = path.extname(r.real).slice(1).toUpperCase() || ''; }
       return out;
+    });
+    // Drag and drop: move or copy inside the Explorer, drop files in from Windows, drag a file out to Windows.
+    ipcMain.handle('fs:transfer', (e, srcRoot, srcRel, dstRoot, dstRel, copy) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const s = resolveInProject(srcRoot, srcRel);
+      if (s.error) return { ok: false, error: s.error };
+      if (!s.clean) return { ok: false, error: 'A whole drive or project folder cannot be moved from here.' };
+      const d = resolveInProject(dstRoot, dstRel);
+      if (d.error) return { ok: false, error: d.error };
+      let isDir = false;
+      try { isDir = fs.statSync(d.real).isDirectory(); } catch { /* handled below */ }
+      if (!isDir) return { ok: false, error: 'Drop it onto a folder.' };
+      return copyOrMove(s.real, d.real, copy === true);
+    });
+    ipcMain.handle('fs:open-web', (e, id, rel) => (isLocalSender(e) ? openInWeb(id, rel) : { ok: false, error: 'Not allowed.' }));
+    ipcMain.handle('fs:import', (e, dstRoot, dstRel, paths) => {
+      if (!isLocalSender(e) || !Array.isArray(paths) || !paths.length || paths.length > 50) return { ok: false, error: 'Not allowed.' };
+      const d = resolveInProject(dstRoot, dstRel);
+      if (d.error) return { ok: false, error: d.error };
+      let isDir = false;
+      try { isDir = fs.statSync(d.real).isDirectory(); } catch { /* handled below */ }
+      if (!isDir) return { ok: false, error: 'Drop it onto a folder.' };
+      let done = 0;
+      const failed = [];
+      for (const p of paths) {
+        if (typeof p !== 'string' || p.length > 1000 || !path.isAbsolute(p) || path.parse(p).root === p || isBlockedName(path.basename(p))) { failed.push('That item cannot be copied here.'); continue; }
+        const r = copyOrMove(path.resolve(p), d.real, true);
+        if (r.ok) done++; else failed.push(r.error);
+      }
+      return { ok: done > 0 || !failed.length, done, failed };
+    });
+    ipcMain.on('fs:drag-out', (e, id, rel) => {
+      if (!isLocalSender(e)) return;
+      const r = resolveInProject(id, rel);
+      if (r.error) return;
+      try { if (!fs.statSync(r.real).isFile()) return; e.sender.startDrag({ file: r.real, icon: dragIconImage() }); } catch { /* the drag simply does not start */ }
     });
     ipcMain.on('cc:reload', (e) => { if (isLocalSender(e)) reloadCurrent(); });
     // Opens the settings file for editing. Notepad is used on Windows because a .json file often has no program assigned to it.
@@ -1402,6 +1708,12 @@ if (!app.requestSingleInstanceLock()) {
     const runTodo = () => { if (todoEnabled()) todoService.refresh(); };
     if (!process.env.CC_TEST_SCRIPT) { setTimeout(runTodo, 9000); setInterval(runTodo, 10 * 60 * 1000); }
     ipcMain.handle('todo:get', (e) => (isLocalSender(e) ? { enabled: todoEnabled(), ...todoService.get() } : null));
+    ipcMain.handle('todo:complete', async (e, title) => {
+      if (!isLocalSender(e) || !todoEnabled() || typeof title !== 'string' || !title || title.length > 300) return { ok: false, error: 'Not available.' };
+      const r = await completeTodo(title);
+      if (r.ok) todoService.refresh();
+      return r;
+    });
     ipcMain.handle('todo:refresh', async (e) => {
       if (!isLocalSender(e)) return null;
       if (!todoEnabled()) return { enabled: false, ...todoService.get() };
