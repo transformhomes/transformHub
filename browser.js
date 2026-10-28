@@ -169,6 +169,11 @@ function createBrowser(deps) {
       }
       items.push(...contextTemplate(wc, p));
       if (!items.length) { const n = nav(tab); items.push({ label: 'Back', enabled: n.back, click: () => back() }, { label: 'Forward', enabled: n.forward, click: () => forward() }, { label: 'Reload', click: () => reload() }); }
+      const pageUrl = wc.getURL();
+      if (isWebUrl(pageUrl)) {
+        if (items.length) items.push({ type: 'separator' });
+        items.push({ label: 'Copy page address', click: () => { Promise.resolve(require('electron').clipboard.writeText(pageUrl)).catch(() => { /* nothing to do */ }); } });
+      }
       Menu.buildFromTemplate(items).popup();
     });
   }
