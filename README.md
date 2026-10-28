@@ -5,11 +5,11 @@ Windows desktop app built with Electron. See package.json for the version.
 
 | Icon | What it is |
 |---|---|
-| Home | Needs attention (overdue and due today), today's events, next 7 days, focus project |
+| Home | Open tasks (yours plus Microsoft To Do, overdue first), today's events and tasks due today, next 7 days, focus project |
 | Inbox | Outlook on the web |
-| Explorer | A read-only folder browser: favourites and your drives, with the folder tree in the side panel |
+| Explorer | A folder browser with drag and drop and a split view: favourites and your drives, with the folder tree beside the folder view |
 | Dr. MD | A live Markdown editor with a Home screen and your recent files (see below) |
-| Tasks | Add, tick off, delete (with undo). Saved on this computer. Can also show Microsoft To Do (experimental, read-only) |
+| Tasks | Add, tick off, delete (with undo). Saved on this computer. Can also show Microsoft To Do (experimental; tick off from Home) |
 | Calendar | Full month view, side panel with today and the next 14 days, add events. Saved on this computer. Can also show your Outlook calendar (read-only, see below) |
 | Teams | Microsoft Teams on the web |
 | Files | OneDrive on the web |
@@ -34,19 +34,37 @@ In web tabs (Outlook, Teams, OneDrive, Claude, dashboards) those keys belong to 
 Ctrl+\ shows or hides the side panel everywhere.
 
 ## Explorer
-Open Explorer and the side panel becomes a folder tree with two groups. **Favourites** holds your configured project folders and any folder you star. **This PC** holds your drives (C:\ by default). Hover over a folder and click the star to add or remove it from Favourites; the same button is on each folder's page. Click a folder to open it in the main area, click a file to preview it (text and images), and use Open or Show in File Explorer for anything else.
+Open Explorer and the folder tree sits on the left of the page, with the folder view beside it. The tree has two groups. **Favourites** holds your configured project folders and any folder you star. **This PC** holds your drives (C:\ by default). Hover over a folder and click the star to add or remove it from Favourites; the same button is on each folder's page. Click a folder to open it in the main area, click a file to preview it (text and images), and use Open or Show in File Explorer for anything else.
 
-It is read-only: nothing is deleted or changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
+Files are only ever moved or copied from here, never deleted or overwritten (see Drag and drop below). Nothing else is changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
+
+Under the drives you also get quick links to your own Desktop, Downloads, Documents, Pictures, Music and Videos folders (wherever Windows keeps them, including OneDrive). To hide them, add `"explorer": { "quickFolders": false }` to your settings file.
 
 Drives: on Windows, C:\ and D:\ are shown if they exist. To change that, add this to your settings file (a drive letter, or a name and folder):
 
        "explorer": { "drives": ["C:\\", "D:\\"] }
 
-## Right-click in the Explorer
-Right-click a file or folder in the Explorer page (or the empty space in a folder) for: Open, Open in File Explorer (or Show in File Explorer for a file), Open with (for apps set up in your settings), **Open in PowerShell here** (in that folder, or the file's folder), **Copy path**, Add to or Remove from favourites (folders), and **Properties** (type, full path, size or item count, created, modified, last opened, read-only). Nothing here deletes, renames or moves files. Like everything in the Explorer, it only works inside your favourites and drives, and the PowerShell window is started with fixed settings so a file name can never be run as a command.
+## Drag and drop, and split view
+- **Move a file or folder:** drag it onto a folder in the list, the folder tree, or the path at the top. It is moved. Hold **Ctrl** to copy instead.
+- **Drop files in from Windows:** drag files from File Explorer or the desktop onto a folder (or onto the open folder's page). They are copied in.
+- **Drag a file out:** hold **Alt** while you drag a file, then drop it on the desktop, a Windows folder, an email or Teams. This copies it; the original stays.
+- **Split view:** click **Split view** to show a second folder beside the first. Click a pane, then pick a folder in the tree (or click folders in that pane) to change it. You can drag between the two panes. **Close split view** (or the ✕) goes back to one.
+- A name clash never overwrites anything: the new item gets a "(2)" on its name. A folder cannot be dropped into itself, and drives and project folders themselves cannot be moved. Moving to a different drive copies the item, then removes the original.
 
-## Apps in the side panel
-List the programs you want one click away in your settings file. They appear under **Apps** in the Explorer side panel, on the Explorer page and in Ctrl+K search. `types` is optional: files of those types get an **Open with** button in the Explorer.
+## Two tabs side by side (inside Workstation)
+**Shift+click** any tab in the left rail to show it beside the tab you are on: the current tab stays on the left and the Shift+clicked one opens on the right (for example the Explorer on the left and your Excel tab on the right). Click a tab normally to change the left side, or click the tab that is on the right to make it the main one. **Close split** (top right) goes back to one tab. The Browser tab always uses the whole area. To move a file from the Explorer into a web page such as Excel, hold **Alt** and drag the file across.
+
+## Side by side with another program
+**Shift+click** a program tile (a desktop program such as Excel or Word; on Home, or in the Explorer's Apps list) to open it beside Workstation: Workstation takes the left half of the screen and the program the right half, on the screen Workstation is on. Then hold **Alt** and drag a file from the Explorer onto the program (for example a spreadsheet onto Excel) to open or insert it there. **Restore size** (next to Edit in the Apps box on Home) puts Workstation back as it was. If the program takes more than about 20 seconds to open, only Workstation is resized; Shift+click again once it is open. This only moves windows: it does not put the program inside Workstation.
+
+## Open a file in Excel, Word or PowerPoint on the web
+Right-click an Excel, Word or PowerPoint file (.xlsx, .xls, .csv, .docx, .doc, .pptx and similar) in the Explorer and choose **Open in Excel (web)** (or Word, PowerPoint). Workstation copies the file into your OneDrive **My files > Documents** folder, using your signed-in Microsoft session, then opens that copy in your Excel, Word or PowerPoint tab, beside the Explorer. The original on your PC is not changed. A name clash never overwrites anything: the copy gets a "(2)". Files over 25 MB are refused (upload those in the OneDrive tab). You must be signed in to Microsoft (the Inbox or OneDrive tab). It relies on Microsoft's own upload and link formats, so a Microsoft change could stop it working; the desktop **Open in Excel** item is not affected.
+
+## Right-click in the Explorer
+Right-click a file or folder in the Explorer page (or the empty space in a folder) for: Open, Open in File Explorer (or Show in File Explorer for a file), **Open in Excel / Word** and similar (for programs in your Apps list that open that kind of file), **Open in PowerShell here** (in that folder, or the file's folder), **Copy path**, Add to or Remove from favourites (folders), and **Properties** (type, full path, size or item count, created, modified, last opened, read-only). Nothing here deletes, renames or moves files. Like everything in the Explorer, it only works inside your favourites and drives, and the PowerShell window is started with fixed settings so a file name can never be run as a command.
+
+## Apps
+List the programs you want one click away in your settings file. They appear under **Apps** in the Explorer folder tree, on the Explorer page and in Ctrl+K search. `types` is optional: files of those types get an **Open in <program>** button and right-click item in the Explorer. Excel (.xlsx, .xls, .csv and similar), Word (.docx, .doc, .rtf), PowerPoint, Acrobat (.pdf) and Notepad++ already know their file types, so they work without any setup. Macro-enabled files (.xlsm, .docm) are not included by default; add them to `types` yourself if you want them.
 
        "apps": [
          { "name": "Typora", "path": "D:\\Program Files\\Typora\\Typora.exe", "types": [".md"] },
@@ -135,7 +153,7 @@ In Settings, choose a picture (PNG, JPG or WebP, up to 8 MB) to sit behind the H
 The sun/moon button in the header switches between light and dark; your choice is remembered. Until you choose, the app follows Windows. If `thumbnail.png` (or `transformHub.png`) sits in the app folder, it shows at the top of the left rail. The window and taskbar icon is `thumbnail.ico` if present (or `transformHub.ico`, then the PNG); `Make-Icon.ps1` builds the .ico from the PNG. The logo and icon files are not stored in this repository.
 
 ## Microsoft To Do in Tasks (experimental, read-only)
-Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page and the side panel (titles only, read-only; tick them off in To Do). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
+Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page, the side panel and the Home page. On the Home page, click the circle beside a To Do task to tick it off: the app opens To Do in the background, ticks that task and checks Microsoft accepted it (this takes a few seconds; the row shows "Ticking…"). Ticking only works for open tasks it can find by title on the Tasks list, and recurring tasks will create their next occurrence as normal. Each task's due date is read too (Overdue, Today, Tomorrow or a date), so To Do tasks due today also appear in Home's Today card and overdue ones are marked Overdue. Due dates fill in on the next refresh (every 10 minutes, or press Refresh on the Tasks page). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
 
 ## Icons
 Rail icons are colour-coded by type. Web tabs show the site's own icon once you have opened the tab once.
