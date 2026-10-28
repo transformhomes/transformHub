@@ -16,10 +16,38 @@ const EXTRACT_SOURCE = `(() => {
   const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
   if (/login\\.microsoftonline|login\\.live|login\\.microsoft/i.test(location.hostname) ||
       document.querySelector('input[type=password],input[name=loginfmt]')) return { state: 'signin', tasks: [], diag: { host: location.hostname } };
-  const CB = '[role=checkbox],input[type=checkbox],[aria-label*="mark as" i],[aria-label*="complete" i],button[class*=checkBox i]';
+  const CB = '[role=checkbox],input[type=checkbox],[aria-label*="mark as" i],[aria-label^="complete" i],button[class*=checkBox i]';
   const cands = [...document.querySelectorAll('[role=listitem],[role=option],[role=row],[role=treeitem],li,[data-testid*="task" i],[class*=taskItem i]')];
   const withCb = cands.filter((el) => el.querySelector(CB));
   const inner = withCb.filter((el) => !withCb.some((o) => o !== el && el.contains(o)));
+  const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const ymd = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const DUE_LEAF = /^(overdue|today$|tomorrow$|yesterday$|(sun|mon|tues?|wed(nes)?|thu(rs?)?|fri|sat(ur)?)(day)?(,\\s.*)?$|\\d{1,2} (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.? \\d{1,2})/i;
+  const parseDue = (raw) => {
+    let t = clean(raw);
+    const overdue = /^overdue/i.test(t);
+    t = t.replace(/^overdue,?\\s*/i, '');
+    const base = new Date(); base.setHours(12, 0, 0, 0);
+    let d = null;
+    if (/^today$/i.test(t)) d = new Date(base);
+    else if (/^tomorrow$/i.test(t)) { d = new Date(base); d.setDate(d.getDate() + 1); }
+    else if (/^yesterday$/i.test(t)) { d = new Date(base); d.setDate(d.getDate() - 1); }
+    else {
+      let m = /(\\d{1,2})\\s+([A-Za-z]{3})[a-z]*(?:,?\\s+(\\d{4}))?/.exec(t), day, mon, yr;
+      if (m) { day = +m[1]; mon = MON.indexOf(m[2].toLowerCase()); yr = m[3] ? +m[3] : null; }
+      else { m = /([A-Za-z]{3})[a-z]*\\.?\\s+(\\d{1,2})(?:,?\\s+(\\d{4}))?/.exec(t); if (m) { mon = MON.indexOf(m[1].toLowerCase()); day = +m[2]; yr = m[3] ? +m[3] : null; } }
+      if (m && mon >= 0) {
+        const y = yr || base.getFullYear();
+        d = new Date(y, mon, day, 12);
+        if (!yr) { const diff = (d - base) / 86400000; if (overdue && diff > 7) d = new Date(y - 1, mon, day, 12); else if (!overdue && diff < -200) d = new Date(y + 1, mon, day, 12); }
+      } else {
+        const w = DOW.indexOf(t.slice(0, 3).toLowerCase());
+        if (w >= 0 && /^[A-Za-z]{3,9}$/.test(t)) { d = new Date(base); let diff = (w - d.getDay() + 7) % 7; if (overdue) diff = diff === 0 ? -7 : diff - 7; d.setDate(d.getDate() + diff); }
+      }
+    }
+    return d ? { due: ymd(d), overdue } : null;
+  };
   const tasks = [];
   for (const el of inner) {
     const cb = el.querySelector(CB);
@@ -37,7 +65,7 @@ const EXTRACT_SOURCE = `(() => {
     while (box && box.parentElement && box.parentElement !== el) {
       const p = box.parentElement;
       if (p.contains(cb) || p.querySelector('button,[role=button],[role=checkbox],input')) break;
-      const hasOther = [...p.querySelectorAll('*')].some((n) => !n.children.length && !box.contains(n) && META.test(clean(n.textContent)));
+      const hasOther = [...p.querySelectorAll('*')].some((n) => { if (n.children.length || box.contains(n)) return false; const c = clean(n.textContent); return META.test(c) || / category$/i.test(c) || DUE_LEAF.test(c); });
       if (hasOther) break;
       box = p;
     }
@@ -46,7 +74,13 @@ const EXTRACT_SOURCE = `(() => {
     if (!title || /^mark as/i.test(title)) title = (boxText && !UI.test(boxText) ? boxText : '') || leaves.find((l) => !UI.test(l)) || lines.find((l) => !UI.test(l)) || '';
     if (!title) continue;
     const done = cb.getAttribute('aria-checked') === 'true' || cb.checked === true || /mark as not completed/i.test(label);
-    tasks.push({ title: title.slice(0, 300), done });
+    let due = '';
+    if (!done) {
+      const dl = leaves.find((l) => l !== title && !title.includes(l) && !UI.test(l) && DUE_LEAF.test(l));
+      const pd = dl ? parseDue(dl) : null;
+      if (pd) due = pd.due;
+    }
+    tasks.push({ title: title.slice(0, 300), done, due });
   }
   const roles = {};
   for (const r of ['listitem', 'option', 'row', 'checkbox', 'list', 'listbox', 'grid', 'tree', 'treeitem']) roles[r] = document.querySelectorAll('[role=' + r + ']').length;
@@ -76,6 +110,17 @@ const EXTRACT_SOURCE = `(() => {
   return { state: tasks.length ? 'ok' : 'none', tasks, diag: { outline,  path: location.pathname, title: clean(document.title).slice(0, 60), candidates: cands.length, withCheckbox: withCb.length, innermost: inner.length, roles } };
 })()`;
 
+// Same reader, but also ticks the first open task whose title matches. Runs inside the To Do page.
+function completeSource(title) {
+  const a = '(() => {';
+  const b = "    tasks.push({ title: title.slice(0, 300), done, due });";
+  if (!EXTRACT_SOURCE.includes(a) || !EXTRACT_SOURCE.includes(b)) throw new Error('reader changed');
+  let src = EXTRACT_SOURCE.replace(a, a + '\n  const WANT = ' + JSON.stringify(String(title).slice(0, 300)) + '; let clicked = false;');
+  src = src.replace(b, "    if (!done && !clicked && title.slice(0, 300) === WANT) { cb.click(); clicked = true; }\n" + b);
+  src = src.replace("return { state: tasks.length ? 'ok' : 'none', tasks,", "return { clicked, state: tasks.length ? 'ok' : 'none', tasks,");
+  return src;
+}
+
 function merge(results) {
   const tasks = [];
   const seen = new Set();
@@ -88,9 +133,9 @@ function merge(results) {
     else if (result.state === 'ok' && state !== 'signin') state = 'ok';
     for (const t of result.tasks || []) {
       const key = t.title.toLowerCase() + '|' + t.done;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) { const prev = tasks.find((x) => x.title.toLowerCase() + '|' + x.done === key); if (prev && !prev.due && /^\d{4}-\d{2}-\d{2}$/.test(t.due || '')) prev.due = t.due; continue; }
       seen.add(key);
-      tasks.push({ id: 'todo:' + tasks.length + ':' + t.title.slice(0, 20), title: t.title, done: !!t.done, list });
+      tasks.push({ id: 'todo:' + tasks.length + ':' + t.title.slice(0, 20), title: t.title, done: !!t.done, due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || '') ? t.due : '', list });
     }
   }
   return { state, tasks: tasks.slice(0, 500), diag };
@@ -134,4 +179,4 @@ function createTodoSync({ scrape, cacheFile, onChange }) {
   return { refresh, get: publicState };
 }
 
-module.exports = { createTodoSync, merge, EXTRACT_SOURCE, ROUTES };
+module.exports = { createTodoSync, merge, EXTRACT_SOURCE, completeSource, ROUTES };
