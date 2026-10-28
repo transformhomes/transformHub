@@ -38,16 +38,57 @@
   .modal dt { color:var(--muted); }
   .modal dd { margin:0; word-break:break-all; user-select:text; }
   img.preview { max-width:100%; max-height:calc(100vh - 260px); margin-top:12px; border-radius:8px; border:1px solid var(--line); background:var(--well); }
+  body { overflow:hidden; }
+  .split { display:flex; height:100vh; }
+  #tree { width:290px; flex:none; overflow:auto; padding:14px 6px 16px; border-right:1px solid var(--line); background:var(--panel); user-select:none; }
+  #root.page { flex:1; min-width:0; max-width:none; height:100%; overflow:auto; box-sizing:border-box; }
+  .tn { display:flex; align-items:center; border-radius:6px; }
+  .tn:hover { background:var(--hover); }
+  .tn.sel { background:var(--accent-bg); }
+  .tn button { border:0; background:transparent; cursor:pointer; color:var(--fg); padding:5px 4px; border-radius:6px; }
+  .tn .chev { width:22px; flex:none; color:var(--muted); text-align:center; padding:5px 0; }
+  .tn .tname { flex:1; min-width:0; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tn.file .tname { color:var(--muted); }
+  .tn.root .tname { font-weight:600; }
+  .tn.sel .tname { color:var(--fg); }
+  .tmsg { color:var(--muted); font-size:12px; padding:4px 8px; }
+  .tgrp { margin:12px 8px 4px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .tgrp:first-child { margin-top:0; }
+  .tn .star { width:24px; flex:none; text-align:center; color:var(--muted); opacity:0; padding:5px 0; }
+  .tn:hover .star, .tn .star:focus-visible, .tn .star.on { opacity:1; }
+  .tn .star.on { color:var(--warn); }
+  #root.splitting { display:flex; padding:0; overflow:hidden; }
+  .pane { flex:1 1 0; min-width:0; height:100%; overflow:auto; padding:22px 24px 40px; box-sizing:border-box; border-top:3px solid transparent; }
+  .pane + .pane { border-left:1px solid var(--line); }
+  .pane.active { border-top-color:var(--accent); }
+  .pane .crumbs { margin-bottom:8px; }
+  .paneHead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .droptarget { outline:2px dashed var(--accent); outline-offset:-2px; background:var(--accent-bg); }
+  .frow[draggable="true"] { user-select:none; }
 </style>
 </head>
 <body>
-<div class="page" id="root"></div>
+<div class="split">
+  <aside id="tree" role="group" aria-label="Folders"></aside>
+  <div class="page" id="root"></div>
+</div>
 
 <script src="common.js"></script>
 <script>
   const root = document.getElementById('root');
   const activeCount = (pid) => App.data.tasks.filter((t) => !t.done && t.project === pid).length;
-  const show = (...nodes) => root.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false));
+  let split = false;                       // two folders side by side
+  let active = 'a';                        // which pane the folder tree opens folders in
+  let paneB = { project: null, path: '', entries: null, error: null };
+  let drag = null;                         // the item being dragged inside this page
+  function show(...nodes) {
+    const list = nodes.flat(Infinity).filter((n) => n != null && n !== false);
+    if (!split) { root.classList.remove('splitting'); root.replaceChildren(...list); return; }
+    root.classList.add('splitting');
+    const a = h('div', { class: 'pane' + (active === 'a' ? ' active' : ''), id: 'paneA', onclick: () => setActive('a') }, ...list);
+    makeDropTarget(a, () => (loc.project && view && view.kind === 'dir' ? { root: loc.project, rel: loc.path } : null));
+    root.replaceChildren(a, paneBEl());
+  }
 
   let roots = { projects: [], drives: [], favs: [], apps: [] };
   const rootById = (id) => roots.projects.find((x) => x.id === id) || roots.drives.find((x) => x.id === id) || null;
@@ -71,8 +112,137 @@
   const join = (a, b) => (a ? a + '/' + b : b);
   const parentOf = (p) => p.split('/').slice(0, -1).join('/');
 
-  async function refreshRoots() { const r = await window.cc.getRoots(); if (r) roots = r; }
-  window.addEventListener('focus', () => { if (started) refreshRoots().then(render); }); // picks up favourites changed in the side panel
+  async function refreshRoots() { const r = await window.cc.getRoots(); if (r) roots = r; renderTree(); }
+  window.addEventListener('focus', () => { if (started) refreshRoots().then(render); }); // picks up apps or favourites changed elsewhere
+
+  // ---- folder tree (left of the folder view) ----
+  const expanded = new Set();
+  const kids = new Map();      // key -> entries | 'loading' | { error }
+  let sel = { project: null, path: '' };
+  let collapsing = null;       // the folder just collapsed by clicking its name, so opening it does not re-expand it
+  const tkey = (project, rel) => project + '\u0001' + rel;
+  const treeEl = document.getElementById('tree');
+
+  function openFromTree(project, rel, isDir) {
+    if (split && active === 'b') {
+      if (isDir) openPaneB(project, rel); else act(() => window.cc.openFile(project, rel), 'Opened.');
+    } else goTo(project, rel);
+  }
+
+  function addNode(parent, project, rel, label, isDir, depth) {
+    const k = tkey(project, rel);
+    const open = expanded.has(k);
+    const selected = sel.project === project && sel.path === rel;
+    const row = h('div', { class: 'tn' + (selected ? ' sel' : '') + (isDir ? '' : ' file') + (depth === 0 ? ' root' : ''), style: 'padding-left:' + (4 + depth * 14) + 'px' });
+    const chev = h('button', { class: 'chev', text: isDir ? (open ? '▾' : '▸') : '' });
+    if (isDir) {
+      chev.setAttribute('aria-label', (open ? 'Collapse ' : 'Expand ') + label);
+      chev.setAttribute('aria-expanded', open ? 'true' : 'false');
+      chev.addEventListener('click', () => toggle(project, rel));
+    } else { chev.disabled = true; chev.tabIndex = -1; chev.setAttribute('aria-hidden', 'true'); }
+    const name = h('button', { class: 'tname', title: label, text: label });
+    if (selected) name.setAttribute('aria-current', 'true');
+    name.addEventListener('click', () => {
+      // Clicking a folder's name opens it and expands it; clicking it again collapses it.
+      if (isDir) { if (expanded.has(k)) { collapsing = k; toggle(project, rel); } else toggle(project, rel, true); }
+      openFromTree(project, rel, isDir);
+    });
+    row.append(chev, name);
+    if (rel !== '') makeDraggable(row, project, rel, isDir);
+    if (isDir) makeDropTarget(row, project, rel);
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const p = rootById(project);
+      if (p) openMenu(e.clientX, e.clientY, p, rel, isDir);
+    });
+    if (isDir && rel !== '') {
+      const pinned = isFav(project, rel);
+      const star = h('button', { class: 'star' + (pinned ? ' on' : ''), title: pinned ? 'Remove from favourites' : 'Add to favourites',
+        'aria-label': (pinned ? 'Remove from favourites: ' : 'Add to favourites: ') + label, text: pinned ? '★' : '☆' });
+      star.addEventListener('click', async () => {
+        const r = await window.cc.toggleFav(project, rel, label);
+        if (r && r.ok) { roots.favs = r.favs; renderTree(); render(); }
+      });
+      row.append(star);
+    }
+    parent.append(row);
+    if (isDir && open) {
+      const list = kids.get(k);
+      const msg = (t) => parent.append(h('div', { class: 'tmsg', style: 'padding-left:' + (30 + depth * 14) + 'px', text: t }));
+      if (list === 'loading' || list === undefined) msg('Loading…');
+      else if (!Array.isArray(list)) msg(list.error);
+      else if (!list.length) msg('Empty');
+      else list.forEach((en) => addNode(parent, project, join(rel, en.name), en.name, en.dir, depth + 1));
+    }
+  }
+
+  function renderTree() {
+    const t = treeEl;
+    const keepScroll = t.scrollTop;
+    t.replaceChildren(h('div', { class: 'tgrp', text: 'Favourites' }));
+    if (!roots.projects.length && !roots.favs.length) t.append(h('div', { class: 'tmsg', text: 'Click the star next to a folder to keep it here.' }));
+    roots.projects.forEach((p) => addNode(t, p.id, '', p.name, true, 0));
+    roots.favs.forEach((f) => addNode(t, f.root, f.rel, f.name, true, 0));
+    t.append(h('div', { class: 'tgrp', text: 'This PC' }));
+    if (!roots.drives.length) t.append(h('div', { class: 'tmsg', text: 'No drives are set up. Add them under "explorer" in the settings file.' }));
+    roots.drives.forEach((d) => addNode(t, d.id, '', d.name, true, 0));
+    if ((roots.apps || []).length) {
+      t.append(h('div', { class: 'tgrp', text: 'Apps' }));
+      roots.apps.forEach((a) => {
+        const row = h('div', { class: 'tn', style: 'padding-left:4px' });
+        const b = h('button', { class: 'tname', style: 'padding-left:26px', title: 'Open ' + a.name, text: a.name });
+        b.addEventListener('click', async (ev) => {
+          const r = await (ev.shiftKey && window.cc.snapApp ? window.cc.snapApp(a.id) : window.cc.launchApp(a.id));
+          if (!r || !r.ok) { const m = h('div', { class: 'tmsg', text: (r && r.error) || 'Could not start ' + a.name + '.' }); row.after(m); setTimeout(() => m.remove(), 6000); }
+        });
+        row.append(b);
+        t.append(row);
+      });
+    }
+    t.scrollTop = keepScroll;
+  }
+
+  async function loadDir(project, rel) {
+    const k = tkey(project, rel);
+    kids.set(k, 'loading');
+    renderTree();
+    const r = await window.cc.listDir(project, rel);
+    kids.set(k, r && r.ok && !r.isFile ? r.entries : (r && r.ok ? [] : { error: (r && r.error) || 'Could not open.' }));
+    renderTree();
+  }
+
+  function toggle(project, rel, forceOpen) {
+    const k = tkey(project, rel);
+    if (expanded.has(k) && !forceOpen) { expanded.delete(k); renderTree(); return; }
+    expanded.add(k);
+    if (!Array.isArray(kids.get(k))) loadDir(project, rel); else renderTree();
+  }
+
+  // Open the folders leading to a place, mark it, and expand it if it is a folder.
+  async function reveal(project, path) {
+    sel = { project, path };
+    const keepClosed = collapsing === tkey(project, path);
+    collapsing = null;
+    const segs = path ? path.split('/') : [];
+    let rel = '';
+    if (!path && keepClosed) { renderTree(); return; }
+    expanded.add(tkey(project, ''));
+    if (!Array.isArray(kids.get(tkey(project, '')))) await loadDir(project, '');
+    for (let i = 0; i < segs.length - 1; i++) {
+      rel = join(rel, segs[i]);
+      expanded.add(tkey(project, rel));
+      if (!Array.isArray(kids.get(tkey(project, rel)))) await loadDir(project, rel);
+    }
+    if (path && !keepClosed) {
+      const r = await window.cc.listDir(project, path);
+      if (r && r.ok && !r.isFile) {
+        expanded.add(tkey(project, path));
+        if (!Array.isArray(kids.get(tkey(project, path)))) await loadDir(project, path);
+      }
+    }
+    renderTree();
+  }
+
 
   async function load() {
     const my = ++seq;
@@ -93,6 +263,7 @@
   function applyLoc(p) {
     loc = { project: (p && typeof p.project === 'string' && p.project) || null, path: (p && typeof p.path === 'string' && p.path) || '' };
     note = null;
+    if (loc.project) reveal(loc.project, loc.path); else { sel = { project: null, path: '' }; renderTree(); }
     load();
   }
 
@@ -110,7 +281,7 @@
   }
 
   function renderAll() {
-    const children = [h('h1', { text: 'Explorer' }), h('p', { class: 'sub', text: 'Pick a favourite or a drive, or browse in the panel on the left. Click the star next to any folder to keep it in your favourites.' })];
+    const children = [h('h1', { text: 'Explorer' }), h('p', { class: 'sub', text: 'Pick a favourite or a drive, or browse the folders on the left. Click the star next to any folder to keep it in your favourites.' })];
     children.push(h('h2', { text: 'Favourites' }));
     const favGrid = h('div', { class: 'grid' });
     roots.projects.forEach((p) => {
@@ -130,27 +301,29 @@
     } else children.push(h('div', { class: 'empty', text: 'No drives are set up. Add them under "explorer" in the settings file (cog in the left rail).' }));
     if ((roots.apps || []).length) {
       children.push(h('h2', { style: 'margin-top:28px', text: 'Apps' }));
-      children.push(h('div', { class: 'row' }, roots.apps.map((a) => h('button', { onclick: () => act(() => window.cc.launchApp(a.id), 'Opened ' + a.name + '.') }, a.name))));
+      children.push(h('div', { class: 'row' }, roots.apps.map((a) => h('button', { title: 'Shift+click: open side by side with Workstation', onclick: (ev) => act(() => (ev.shiftKey && window.cc.snapApp ? window.cc.snapApp(a.id) : window.cc.launchApp(a.id)), 'Opened ' + a.name + '.') }, a.name))));
       children.push(noteBox());
     }
     show(children);
   }
 
-  function crumbs(p) {
-    const segs = loc.path ? loc.path.split('/') : [];
+  function crumbsFor(p, path, nav, homeNav) {
+    const segs = path ? path.split('/') : [];
+    const btn = (label, project, rel) => { const b = h('button', { class: 'ghost', onclick: () => nav(project, rel), text: label }); makeDropTarget(b, project, rel); return b; };
     const bar = h('div', { class: 'crumbs', role: 'navigation', 'aria-label': 'Folder path' },
-      h('button', { class: 'ghost', onclick: () => goTo('', ''), text: 'Explorer' }), '›');
+      h('button', { class: 'ghost', onclick: homeNav, text: 'Explorer' }), '›');
     if (!segs.length) bar.append(h('span', { class: 'here', text: p.name }));
     else {
-      bar.append(h('button', { class: 'ghost', onclick: () => goTo(p.id, ''), text: p.name }));
+      bar.append(btn(p.name, p.id, ''));
       segs.forEach((seg, i) => {
         bar.append('›');
         if (i === segs.length - 1) bar.append(h('span', { class: 'here', text: seg }));
-        else bar.append(h('button', { class: 'ghost', onclick: () => goTo(p.id, segs.slice(0, i + 1).join('/')), text: seg }));
+        else bar.append(btn(seg, p.id, segs.slice(0, i + 1).join('/')));
       });
     }
     return bar;
   }
+  const crumbs = (p) => crumbsFor(p, loc.path, goTo, () => goTo('', ''));
 
   function noteBox() { return note && h('div', { class: 'msg ' + (note.ok ? 'ok' : 'err'), text: note.text }); }
 
@@ -183,6 +356,24 @@
     ];
   }
 
+  function buildList(p, entries, curPath, onDir, onFile) {
+    const list = h('div', { class: 'files', role: 'list' },
+      h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
+    if (!entries.length) list.append(h('div', { class: 'empty', style: 'padding:14px', text: 'This folder is empty. Drop files here to add them.' }));
+    entries.forEach((en) => {
+      const rel = join(curPath, en.name);
+      const row = h('button', { class: 'frow', role: 'listitem', 'data-root': p.id, 'data-rel': rel, 'data-dir': en.dir ? '1' : '', onclick: () => (en.dir ? onDir(rel) : onFile(rel)) },
+        h('span', { class: 'n' }, h('span', { class: 'ico' + (en.dir ? ' dir' : ''), 'aria-hidden': 'true' }), h('span', { class: 't', text: en.name })),
+        h('span', { class: 'm', text: dateLabel(en.mtime) }),
+        h('span', { class: 'm', text: en.dir ? '' : sizeLabel(en.size) }));
+      makeDraggable(row, p.id, rel, en.dir);
+      if (en.dir) makeDropTarget(row, p.id, rel);
+      list.append(row);
+    });
+    return list;
+  }
+  const dragHint = () => h('div', { class: 'muted', style: 'font-size:12px;margin-top:8px', text: 'Drag a file onto a folder to move it (hold Ctrl to copy). Drop files from Windows to copy them in. Hold Alt while dragging a file to drag it out to Windows.' });
+
   function renderDir(p) {
     const atRoot = !loc.path;
     const isFocus = App.data.focusProject === p.id;
@@ -193,18 +384,11 @@
       atRoot && proj && h('button', { onclick: () => window.cc.openArcane() }, 'Arcane terminals'),
       atRoot && proj && h('button', { class: isFocus ? '' : 'ghost', onclick: () => App.save({ focusProject: isFocus ? null : p.id }) }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus'));
 
-    const list = h('div', { class: 'files', role: 'list' },
-      h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
-    if (!view.entries.length) list.append(h('div', { class: 'empty', style: 'padding:14px', text: 'This folder is empty.' }));
-    view.entries.forEach((en) => {
-      list.append(h('button', { class: 'frow', role: 'listitem', 'data-name': en.name, 'data-dir': en.dir ? '1' : '', onclick: () => goTo(p.id, join(loc.path, en.name)) },
-        h('span', { class: 'n' }, h('span', { class: 'ico' + (en.dir ? ' dir' : ''), 'aria-hidden': 'true' }), h('span', { class: 't', text: en.name })),
-        h('span', { class: 'm', text: dateLabel(en.mtime) }),
-        h('span', { class: 'm', text: en.dir ? '' : sizeLabel(en.size) })));
-    });
+    actions.append(h('button', { class: split ? '' : 'ghost', onclick: toggleSplit }, split ? 'Close split view' : 'Split view'));
+    const list = buildList(p, view.entries, loc.path, (rel) => goTo(p.id, rel), (rel) => goTo(p.id, rel));
 
     show(crumbs(p), h('h1', { text: loc.path ? loc.path.split('/').pop() : p.name }), h('p', { class: 'sub', text: fullPath(p, loc.path) }),
-      actions, noteBox(), list,
+      actions, noteBox(), list, dragHint(),
       view.truncated && h('div', { class: 'muted', style: 'margin-top:8px', text: 'Showing the first 1000 items.' }),
       atRoot && proj && tasksBlock(p));
   }
@@ -229,7 +413,7 @@
   function openWithButtons(p) {
     const ext = (/\.[^./]+$/.exec(loc.path) || [''])[0].toLowerCase();
     return (roots.apps || []).filter((a) => a.types.includes(ext)).map((a) =>
-      h('button', { onclick: () => act(() => window.cc.openWith(a.id, p.id, loc.path), 'Opened in ' + a.name + '.') }, 'Open with ' + a.name));
+      h('button', { onclick: () => act(() => window.cc.openWith(a.id, p.id, loc.path), 'Opened in ' + (a.label || a.name) + '.') }, 'Open in ' + (a.label || a.name)));
   }
 
   function favButton(p) {
@@ -237,7 +421,7 @@
     return h('button', { class: on ? '' : 'ghost', onclick: async () => {
       const r = await window.cc.toggleFav(p.id, loc.path, loc.path.split('/').pop());
       if (r && r.ok) roots.favs = r.favs; else note = { ok: false, text: (r && r.error) || 'Could not change favourites.' };
-      render();
+      renderTree(); render();
     } }, on ? '★ Favourite (click to remove)' : '☆ Add to favourites');
   }
 
@@ -250,6 +434,166 @@
     }
     if (view.kind === 'file') return renderFile(p);
     renderDir(p);
+  }
+
+  // ---- drag and drop ----
+  const clearDrop = () => document.querySelectorAll('.droptarget').forEach((n) => n.classList.remove('droptarget'));
+  // Moving inside the app uses the mouse directly (reliable in every window). Dropping files in from Windows uses the browser's own drop events.
+  const dropTargets = new WeakMap();   // element -> function returning { root, rel } or null
+  let justDragged = false;
+  document.addEventListener('click', (e) => { if (justDragged) { e.preventDefault(); e.stopPropagation(); justDragged = false; } }, true);
+
+  function targetAt(x, y, from) {
+    for (let n = document.elementFromPoint(x, y); n; n = n.parentElement) {
+      const f = dropTargets.get(n);
+      if (f) { const t = f(); if (t && !(from && t.root === from.root && t.rel === from.rel)) return { node: n, t }; }
+    }
+    return null;
+  }
+
+  function makeDraggable(node, rootId, rel, isDir) {
+    node.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); // stops Windows starting a text-selection or built-in drag instead of ours
+      const sx = e.clientX, sy = e.clientY;
+      const from = { root: rootId, rel };
+      let ghost = null, hit = null, active = false;
+      const label = rel.split('/').pop();
+      const stop = () => {
+        document.removeEventListener('mousemove', move, true);
+        document.removeEventListener('mouseup', up, true);
+        document.removeEventListener('keydown', key, true);
+        if (ghost) ghost.remove();
+        clearDrop();
+        document.body.style.userSelect = '';
+        drag = null;
+      };
+      const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); stop(); justDragged = active; } };
+      const move = (ev) => {
+        if (!active) {
+          if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 6) return;
+          if (ev.altKey && !isDir) { stop(); window.cc.dragOut(rootId, rel); justDragged = true; return; } // Alt: a real Windows drag, for other programs and folders
+          active = true; drag = from;
+          document.body.style.userSelect = 'none';
+          ghost = h('div', { style: 'position:fixed;z-index:80;pointer-events:none;padding:5px 10px;border-radius:8px;background:var(--card);border:1px solid var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:13px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: label });
+          document.body.append(ghost);
+        }
+        ghost.style.left = (ev.clientX + 14) + 'px'; ghost.style.top = (ev.clientY + 10) + 'px';
+        hit = targetAt(ev.clientX, ev.clientY, null);
+        clearDrop();
+        if (hit) { hit.node.classList.add('droptarget'); ghost.textContent = (ev.ctrlKey ? 'Copy ' : 'Move ') + label; } else ghost.textContent = label;
+        ev.preventDefault();
+      };
+      const up = (ev) => {
+        const t = active ? targetAt(ev.clientX, ev.clientY, null) : null;
+        const copy = ev.ctrlKey;
+        const was = active;
+        stop();
+        if (was) { justDragged = true; setTimeout(() => { justDragged = false; }, 50); }
+        if (t) moveItem(from, t.t.root, t.t.rel, copy);
+      };
+      document.addEventListener('mousemove', move, true);
+      document.addEventListener('mouseup', up, true);
+      document.addEventListener('keydown', key, true);
+    });
+  }
+
+  // target: a root id plus a path, or a function that returns { root, rel } (or null) when the drop happens
+  function makeDropTarget(node, targetOrRoot, rel) {
+    const resolve = () => (typeof targetOrRoot === 'function' ? targetOrRoot() : { root: targetOrRoot, rel: rel || '' });
+    dropTargets.set(node, resolve);
+    // files dragged in from Windows
+    const wants = (e) => { const t = e.dataTransfer && e.dataTransfer.types ? [...e.dataTransfer.types] : []; return t.includes('Files'); };
+    node.addEventListener('dragover', (e) => {
+      if (!wants(e) || !resolve()) return;
+      e.preventDefault(); e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!node.classList.contains('droptarget')) { clearDrop(); node.classList.add('droptarget'); }
+    });
+    node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove('droptarget'); });
+    node.addEventListener('drop', (e) => {
+      const t = resolve();
+      if (!wants(e) || !t) return;
+      e.preventDefault(); e.stopPropagation(); clearDrop();
+      importDropped(e, t.root, t.rel);
+    });
+  }
+
+  const needsRestart = () => { note = { ok: false, text: 'Drag and drop needs the full app to be restarted once (close Transform Workstation and start it again).' }; render(); };
+  async function moveItem(from, dstRoot, dstRel, copy) {
+    if (!window.cc.transferFile) { needsRestart(); return; }
+    let r;
+    try { r = await window.cc.transferFile(from.root, from.rel, dstRoot, dstRel, copy); } catch { r = null; }
+    note = r && r.ok ? { ok: true, text: r.same ? 'It is already in that folder.' : (copy ? 'Copied' : 'Moved') + ' ' + (r.name || 'the item') + '.' } : { ok: false, text: (r && r.error) || 'Could not do that.' };
+    refreshAll();
+  }
+  async function importDropped(e, dstRoot, dstRel) {
+    if (!window.cc.importFiles || !window.cc.pathForFile) { needsRestart(); return; }
+    const paths = [...e.dataTransfer.files].map((f) => window.cc.pathForFile(f)).filter(Boolean);
+    if (!paths.length) { note = { ok: false, text: 'Windows did not give a location for that item, so it could not be copied.' }; render(); return; }
+    let r;
+    try { r = await window.cc.importFiles(dstRoot, dstRel, paths); } catch { r = null; }
+    if (!r) note = { ok: false, text: 'Could not copy those files.' };
+    else if (r.failed && r.failed.length) note = { ok: r.done > 0, text: (r.done ? 'Copied ' + r.done + (r.done === 1 ? ' item' : ' items') + '. ' : '') + r.failed[0] + (r.failed.length > 1 ? ' (and ' + (r.failed.length - 1) + ' more)' : '') };
+    else note = { ok: true, text: 'Copied ' + r.done + (r.done === 1 ? ' item' : ' items') + '.' };
+    refreshAll();
+  }
+  function refreshAll() {
+    kids.clear();
+    [...expanded].forEach((k) => { const [pr, rl] = k.split('\u0001'); loadDir(pr, rl); });
+    load();
+    loadPaneB();
+  }
+  // anything dropped on empty space is ignored, and never opened as a page
+  document.addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; });
+  document.addEventListener('drop', (e) => { e.preventDefault(); clearDrop(); });
+  makeDropTarget(root, () => (!split && loc.project && view && view.kind === 'dir' ? { root: loc.project, rel: loc.path } : null));
+
+  // ---- second pane (split view) ----
+  function setActive(which) {
+    if (active === which) return;
+    active = which;
+    const a = document.getElementById('paneA'), b = document.getElementById('paneB');
+    if (a) a.classList.toggle('active', which === 'a');
+    if (b) b.classList.toggle('active', which === 'b');
+    const q = which === 'a' ? loc : paneB;
+    if (q.project) reveal(q.project, q.path);
+  }
+  function toggleSplit() {
+    split = !split;
+    if (split) { paneB = { project: loc.project, path: loc.path, entries: null, error: null }; active = 'a'; loadPaneB(); } else { active = 'a'; render(); }
+  }
+  async function loadPaneB() {
+    if (!split) return;
+    const my = paneB;
+    if (!paneB.project || !rootById(paneB.project)) { paneB.entries = null; render(); return; }
+    const r = await window.cc.listDir(paneB.project, paneB.path);
+    if (my !== paneB) return;
+    if (r && r.ok && !r.isFile) { paneB.entries = r.entries; paneB.error = null; }
+    else { paneB.entries = null; paneB.error = (r && r.error) || 'Could not open this.'; }
+    render();
+  }
+  function openPaneB(project, path) {
+    paneB = { project: project || null, path: path || '', entries: null, error: null };
+    loadPaneB();
+  }
+  function paneBEl() {
+    const p = rootById(paneB.project);
+    const box = h('div', { class: 'pane' + (active === 'b' ? ' active' : ''), id: 'paneB', onclick: () => setActive('b') });
+    makeDropTarget(box, () => (p && paneB.entries ? { root: p.id, rel: paneB.path } : null));
+    const close = h('button', { class: 'ghost', title: 'Close split view', 'aria-label': 'Close split view', onclick: (e) => { e.stopPropagation(); toggleSplit(); }, text: '✕' });
+    if (!p) {
+      box.append(h('div', { class: 'paneHead' }, h('h2', { style: 'margin:0', text: 'Second folder' }), close),
+        h('div', { class: 'empty', text: 'Click this pane, then pick a folder in the tree on the left to show it here.' }));
+      return box;
+    }
+    box.append(h('div', { class: 'paneHead' }, crumbsFor(p, paneB.path, (pr, rl) => openPaneB(pr, rl), () => openPaneB(null, '')), close),
+      h('h1', { text: paneB.path ? paneB.path.split('/').pop() : p.name }),
+      h('p', { class: 'sub', text: fullPath(p, paneB.path) }));
+    if (paneB.error) box.append(h('div', { class: 'msg err', text: paneB.error }));
+    else if (!paneB.entries) box.append(h('div', { class: 'empty', text: 'Loading…' }));
+    else box.append(buildList(p, paneB.entries, paneB.path, (rel) => openPaneB(p.id, rel), (rel) => act(() => window.cc.openFile(p.id, rel), 'Opened.')));
+    return box;
   }
 
   // ---- right-click menu and Properties ----
@@ -275,6 +619,15 @@
     close.focus();
   }
 
+  const WEB_EXT = { '.xlsx': 'Excel', '.xls': 'Excel', '.xlsb': 'Excel', '.csv': 'Excel', '.xltx': 'Excel', '.docx': 'Word', '.doc': 'Word', '.dotx': 'Word', '.rtf': 'Word', '.pptx': 'PowerPoint', '.ppt': 'PowerPoint' };
+  async function openWeb(p, rel, label) {
+    if (!window.cc.openInWeb) { needsRestart(); return; }
+    note = { ok: true, text: 'Sending to your OneDrive (My files > Documents), then opening in ' + label + ' (web)…' }; render();
+    let r; try { r = await window.cc.openInWeb(p.id, rel); } catch { r = null; }
+    note = r && r.ok ? { ok: true, text: 'Opened ' + (r.name || 'the file') + ' in ' + label + ' (web). A copy is in OneDrive, My files, Documents.' } : { ok: false, text: (r && r.error) || 'Could not open it.' };
+    render();
+  }
+
   function openMenu(x, y, p, rel, isDir) {
     closeMenu();
     const isFav0 = isDir && rel && isFav(p.id, rel);
@@ -287,15 +640,17 @@
     } else {
       items.push(item('Open', () => act(() => window.cc.openFile(p.id, rel), 'Opened.')));
       items.push(item('Show in File Explorer', () => act(() => window.cc.revealFile(p.id, rel), 'Shown in File Explorer.')));
-      (roots.apps || []).filter((a) => a.types.includes(ext)).forEach((a) => items.push(item('Open with ' + a.name, () => act(() => window.cc.openWith(a.id, p.id, rel), 'Opened in ' + a.name + '.'))));
+      (roots.apps || []).filter((a) => a.types.includes(ext)).forEach((a) => items.push(item('Open in ' + (a.label || a.name), () => act(() => window.cc.openWith(a.id, p.id, rel), 'Opened in ' + (a.label || a.name) + '.'))));
     }
+    const web = WEB_EXT[ext];
+    if (!isDir && web) items.push(item('Open in ' + web + ' (web)', () => openWeb(p, rel, web)));
     items.push(h('hr'));
     items.push(item('Open in PowerShell here', () => act(() => window.cc.openPowerShell(p.id, rel), 'Opened PowerShell.')));
     items.push(item('Copy path', () => act(() => window.cc.copyPath(p.id, rel), 'Path copied.')));
     if (isDir && rel) items.push(item(isFav0 ? 'Remove from favourites' : 'Add to favourites', async () => {
       const r = await window.cc.toggleFav(p.id, rel, rel.split('/').pop());
       if (r && r.ok) roots.favs = r.favs; else note = { ok: false, text: (r && r.error) || 'Could not change favourites.' };
-      render();
+      renderTree(); render();
     }));
     items.push(h('hr'));
     items.push(item('Properties', () => showProps(p, rel)));
@@ -309,15 +664,15 @@
   }
 
   document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.ctx, .modal, input, textarea, pre.preview, #tree')) return; // keep normal editing and copying menus (the tree has its own)
+    const row = e.target.closest('.frow[data-rel]');
+    if (row) { const rp = rootById(row.dataset.root); if (!rp) return; e.preventDefault(); openMenu(e.clientX, e.clientY, rp, row.dataset.rel, row.dataset.dir === '1'); return; }
+    if (e.target.closest('#paneB')) { const bp = rootById(paneB.project); if (bp) { e.preventDefault(); openMenu(e.clientX, e.clientY, bp, paneB.path, true); } return; }
     const p = rootById(loc.project);
     if (!p || !view) return; // the list of places has nothing to act on
-    if (e.target.closest('.ctx, .modal, input, textarea, pre.preview')) return; // keep normal editing and copying menus
     e.preventDefault();
-    if (view.kind === 'dir') {
-      const row = e.target.closest('.frow[data-name]');
-      if (row) openMenu(e.clientX, e.clientY, p, join(loc.path, row.dataset.name), row.dataset.dir === '1');
-      else openMenu(e.clientX, e.clientY, p, loc.path, true);
-    } else if (view.kind === 'file') openMenu(e.clientX, e.clientY, p, loc.path, false);
+    if (view.kind === 'dir') openMenu(e.clientX, e.clientY, p, loc.path, true);
+    else if (view.kind === 'file') openMenu(e.clientX, e.clientY, p, loc.path, false);
   });
   document.addEventListener('click', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
   window.addEventListener('blur', closeMenu);
