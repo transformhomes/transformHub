@@ -1,6 +1,6 @@
 // Bridge for the built-in pages (Home, Explorer, Tasks, Calendar) only.
 // Web sections (Outlook, Teams, Claude...) never get this.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('cc', {
   getData: () => ipcRenderer.invoke('data:get'),
@@ -38,11 +38,19 @@ contextBridge.exposeInMainWorld('cc', {
   addApp: () => ipcRenderer.invoke('app:add'),
   removeApp: (id) => ipcRenderer.invoke('app:remove', id),
   launchApp: (id) => ipcRenderer.invoke('app:launch', id),
+  snapApp: (id) => ipcRenderer.invoke('app:snap', id),
+  restoreLayout: () => ipcRenderer.invoke('app:restore-layout'),
+  layoutState: () => ipcRenderer.invoke('app:layout-state'),
   openWith: (id, root, rel) => ipcRenderer.invoke('app:open-with', id, root, rel),
   toggleFav: (root, rel, name) => ipcRenderer.invoke('explorer:fav', root, rel, name),
   openFolder: (id) => ipcRenderer.invoke('projects:open-folder', id),
   openArcane: () => ipcRenderer.invoke('projects:open-arcane'),
   go: (sectionId) => ipcRenderer.send('cc:select', sectionId),
+  transferFile: (srcRoot, srcRel, dstRoot, dstRel, copy) => ipcRenderer.invoke('fs:transfer', srcRoot, srcRel, dstRoot, dstRel, copy === true),
+  importFiles: (dstRoot, dstRel, paths) => ipcRenderer.invoke('fs:import', dstRoot, dstRel, paths),
+  openInWeb: (root, rel) => ipcRenderer.invoke('fs:open-web', root, rel),
+  dragOut: (root, rel) => ipcRenderer.send('fs:drag-out', root, rel),
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
   listDir: (project, rel) => ipcRenderer.invoke('fs:list', project, rel),
   readFile: (project, rel) => ipcRenderer.invoke('fs:read', project, rel),
   openFile: (project, rel) => ipcRenderer.invoke('fs:open', project, rel),
@@ -52,6 +60,7 @@ contextBridge.exposeInMainWorld('cc', {
   copyPath: (id, rel) => ipcRenderer.invoke('fs:copy-path', id, rel),
   getProperties: (id, rel) => ipcRenderer.invoke('fs:properties', id, rel),
   getTodo: () => ipcRenderer.invoke('todo:get'),
+  completeTodo: (title) => ipcRenderer.invoke('todo:complete', title),
   refreshTodo: () => ipcRenderer.invoke('todo:refresh'),
   onTodo: (fn) => ipcRenderer.on('todo:changed', (_e, s) => fn(s)),
   navigate: (params) => ipcRenderer.send('cc:navigate', params),
