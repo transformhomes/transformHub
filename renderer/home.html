@@ -108,6 +108,31 @@
   window.cc.onHomeBackground(() => { applyBackground(); loadRecent(false); });
   const el = (id) => document.getElementById(id);
 
+  // A Microsoft To Do task: click the circle to tick it off in To Do
+  const ticking = new Set();
+  function todoRow(t) {
+    const overdue = t.due && t.due < todayStr();
+    const busy = ticking.has(t.title);
+    const btn = h('button', {
+      class: 'todo-tick', title: 'Tick off in Microsoft To Do', 'aria-label': 'Mark "' + t.title + '" done in Microsoft To Do', disabled: busy,
+      style: 'width:16px;height:16px;padding:0;border:1.5px solid var(--muted);border-radius:50%;flex:none;background:' + (busy ? 'var(--muted)' : 'transparent') + ';cursor:pointer',
+      onclick: async () => {
+        if (ticking.has(t.title)) return;
+        ticking.add(t.title); if (typeof render === 'function') render();
+        let r;
+        try { r = await window.cc.completeTodo(t.title); } catch { r = { ok: false, error: 'Could not tick the task.' }; }
+        ticking.delete(t.title);
+        if (r && r.ok) toast('Ticked off in To Do');
+        else toast((r && r.error) || 'Could not tick the task.');
+        if (typeof render === 'function') render();
+      } });
+    return h('div', { class: 'task' + (busy ? ' done' : '') },
+      btn,
+      h('span', { class: 'title', text: t.title }),
+      h('span', { class: 'tag', title: 'Microsoft To Do', text: busy ? 'Ticking…' : 'To Do' }),
+      t.due && h('span', { class: 'due' + (overdue ? ' overdue' : ''), text: (overdue ? 'Overdue · ' : '') + fmtDate(t.due) }));
+  }
+
   function card(title, count, body) {
     return h('div', { class: 'card' },
       h('h2', {}, h('span', { text: title }), count != null && h('span', { class: 'count', text: String(count) })),
@@ -187,12 +212,20 @@
     const aside = el('appsAside');
     const note = h('div', { class: 'msg err', style: 'display:none;margin-top:8px' });
     const say = (text, ok) => { note.className = 'msg ' + (ok ? 'ok' : 'err'); note.textContent = text; note.style.display = ''; };
+    if (snapNote) { say(snapNote, false); snapNote = ''; }
     const tiles = apps.map((a) => {
       const icon = icons[a.id] ? h('img', { src: icons[a.id], alt: '' }) : h('div', { class: 'letter', 'aria-hidden': 'true', text: a.name.charAt(0).toUpperCase() });
-      const tile = h('button', { class: 'tile', 'data-id': a.id, 'aria-label': (editing ? 'Remove ' : 'Open ') + a.name, title: editing ? 'Remove ' + a.name + ' from this list' : 'Open ' + a.name, onclick: async () => {
+      const tile = h('button', { class: 'tile', 'data-id': a.id, 'aria-label': (editing ? 'Remove ' : 'Open ') + a.name, title: editing ? 'Remove ' + a.name + ' from this list' : 'Open ' + a.name + ' (Shift+click: open side by side with Workstation)', onclick: async (ev) => {
         if (editing) {
           const r = await window.cc.removeApp(a.id);
           if (r && r.ok) { await reloadApps(); } else say((r && r.error) || 'Could not remove it.', false);
+          return;
+        }
+        if (ev && ev.shiftKey && window.cc.snapApp) {
+          say('Opening ' + a.name + ' beside Workstation…', true);
+          const r = await window.cc.snapApp(a.id);
+          if (!(r && r.ok)) say((r && r.error) || 'Could not place ' + a.name + '.', false);
+          else { snapped = true; snapNote = r.note || ''; renderApps(); }
           return;
         }
         const r = await window.cc.launchApp(a.id);
@@ -208,7 +241,8 @@
     const tilesBox = h('div', { class: 'tiles' }, tiles, !editing && add);
     aside.replaceChildren(h('div', { class: 'card' },
       h('div', { class: 'aside-head' }, h('h2', { style: 'margin:0', text: 'Apps' }),
-        apps.length > 0 && h('button', { class: 'ghost', onclick: () => { editing = !editing; renderApps(); } }, editing ? 'Done' : 'Edit')),
+        h('span', {}, snapped && h('button', { class: 'ghost', title: 'Put Workstation back to its previous size', onclick: async () => { await window.cc.restoreLayout(); snapped = false; renderApps(); } }, 'Restore size'),
+          apps.length > 0 && h('button', { class: 'ghost', onclick: () => { editing = !editing; renderApps(); } }, editing ? 'Done' : 'Edit'))),
       tilesBox,
       !apps.length && h('p', { class: 'muted', style: 'font-size:12.5px;margin:10px 0 0', text: apps.length ? 'Drag a tile to move it, or use Alt+Shift+Arrow keys on a tile.' : 'Add programs from this computer to open them from here. They open in their own windows, outside Transform Workstation.' }),
       note));
@@ -222,6 +256,10 @@
       },
     });
   }
+
+  let snapped = false;
+  let snapNote = '';
+  if (window.cc.layoutState) window.cc.layoutState().then((r) => { if (r && r.snapped) { snapped = true; if (typeof renderApps === 'function') renderApps(); } });
 
   async function reloadApps() {
     const r = await window.cc.getRoots();
@@ -238,9 +276,11 @@
     el('date').textContent = now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
     const today = todayStr();
-    const tasks = App.data.tasks.filter((t) => !t.done);
-    const overdue = sortTasks(tasks.filter((t) => t.due && t.due < today));
-    const dueToday = tasks.filter((t) => t.due === today);
+    // Open tasks from this app plus Microsoft To Do (when it is switched on); To Do ones are read-only
+    const mine = App.data.tasks.filter((t) => !t.done);
+    const todoOpen = (App.todo && App.todo.enabled ? (App.todo.tasks || []) : []).filter((t) => !t.done)
+      .map((t) => ({ id: t.id, title: t.title, due: /^\d{4}-\d{2}-\d{2}$/.test(t.due || '') ? t.due : '', created: 0, fromTodo: true, list: t.list }));
+    const tasks = [...mine, ...todoOpen];
     const evs = combinedEvents();
     const todayEvents = sortEvents(evs.filter((e) => e.date === today));
     const soon = sortEvents(evs.filter((e) => e.date > today && e.date <= addDays(today, 7)));
@@ -261,15 +301,29 @@
 
     renderApps();
 
+    // Open tasks: overdue first, then by due date, undated last
+    const LIMIT = 10;
+    const sorted = sortTasks(tasks);
     const needs = [];
-    if (overdue.length) { needs.push(h('div', { class: 'group-title', style: 'margin-top:0;color:var(--danger)', text: 'Overdue' })); overdue.slice(0, 6).forEach((t) => needs.push(taskRow(t))); }
-    if (dueToday.length) { needs.push(h('div', { class: 'group-title', style: overdue.length ? '' : 'margin-top:0', text: 'Due today' })); dueToday.forEach((t) => needs.push(taskRow(t))); }
-    if (!needs.length) needs.push(h('div', { class: 'empty', text: 'Nothing overdue or due today.' }));
+    if (sorted.length) {
+      sorted.slice(0, LIMIT).forEach((t) => needs.push(t.fromTodo ? todoRow(t) : taskRow(t)));
+      if (sorted.length > LIMIT) needs.push(h('div', { class: 'muted', style: 'font-size:12.5px;margin-top:8px', text: '+ ' + (sorted.length - LIMIT) + ' more open tasks' }));
+    } else needs.push(h('div', { class: 'empty', text: 'No open tasks.' }));
+
+    // Today: events, then anything due today (this app and To Do)
+    const dueTodayTasks = sorted.filter((t) => t.due === today);
+    const todayBody = [];
+    if (todayEvents.length) todayBody.push(...todayEvents.map((e) => evLine(e, false)));
+    if (dueTodayTasks.length) {
+      if (todayEvents.length) todayBody.push(h('div', { class: 'group-title', text: 'Tasks due today' }));
+      todayBody.push(...dueTodayTasks.map((t) => (t.fromTodo ? todoRow(t) : taskRow(t))));
+    }
+    if (!todayBody.length) todayBody.push(h('div', { class: 'empty', text: 'No events or tasks today.' }));
 
     el('cols').replaceChildren(
       monthCard(evs),
-      card('Needs attention', overdue.length + dueToday.length, h('div', {}, needs)),
-      card('Today', todayEvents.length, todayEvents.length ? h('div', {}, todayEvents.map((e) => evLine(e, false))) : h('div', { class: 'empty', text: 'No events today.' })),
+      card('Tasks', sorted.length, h('div', {}, needs)),
+      card('Today', todayEvents.length + dueTodayTasks.length, h('div', {}, todayBody)),
       card('Coming up (7 days)', soon.length, soon.length ? h('div', {}, soon.map((e) => evLine(e, true))) : h('div', { class: 'empty', text: 'Nothing in the next 7 days.' })));
 
     renderRecent();
