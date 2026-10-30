@@ -69,6 +69,11 @@
   .tile.drop-after { box-shadow:3px 0 0 0 var(--accent); }
   .tile.add .plus { width:40px; height:40px; border-radius:8px; border:1.5px dashed var(--line-strong); display:grid; place-items:center; font-size:22px; color:var(--muted); }
   .tile .rm { position:absolute; top:2px; right:2px; width:22px; height:22px; padding:0; border-radius:50%; font-size:14px; line-height:1; color:var(--danger); background:var(--card); border:1px solid var(--line); }
+  .ghead { display:flex; align-items:center; gap:6px; width:100%; text-align:left; background:transparent; border:0; padding:8px 2px 2px; margin-top:6px; font-size:11.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); cursor:pointer; border-radius:6px; }
+  .ghead:hover { color:var(--fg); }
+  .ghead .cnt { margin-left:auto; font-weight:400; }
+  .ghead.droptarget, .newgroup.droptarget { outline:2px dashed var(--accent); outline-offset:1px; background:var(--hover); }
+  .newgroup { display:flex; align-items:center; gap:8px; margin-top:10px; padding:10px; border:1.5px dashed var(--line-strong); border-radius:10px; font-size:12.5px; }
   .aside-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:2px; }
   .aside-head button { padding:3px 10px; font-size:12.5px; }
 </style>
@@ -208,53 +213,110 @@
       dayEvents.length ? h('div', {}, dayEvents.map((e) => evLine(e, false))) : h('div', { class: 'empty', text: 'Nothing on this day.' }));
   }
 
+  // Apps are shown in groups ("Office", "Utilities" ...). A tile's group comes from the settings file or, for well-known programs, from its name.
+  const OTHER = 'Other';
+  const COLLAPSE_KEY = 'th-apps-collapsed';
+  const loadCollapsed = () => { try { const v = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]'); return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } };
+  const saveCollapsed = (set) => { try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set])); } catch { /* not remembered */ } };
+  let collapsed = loadCollapsed();
+  let newGroupOpen = false;
+
+  function groupedApps() {
+    const order = [];
+    const by = new Map();
+    for (const a of apps) {
+      const g = a.group || '';
+      if (!by.has(g)) { by.set(g, []); if (g) order.push(g); }
+      by.get(g).push(a);
+    }
+    const list = order.map((g) => ({ name: g, apps: by.get(g) }));
+    if (by.has('')) list.push({ name: '', apps: by.get('') });
+    return list;
+  }
+
   function renderApps() {
     const aside = el('appsAside');
     const note = h('div', { class: 'msg err', style: 'display:none;margin-top:8px' });
     const say = (text, ok) => { note.className = 'msg ' + (ok ? 'ok' : 'err'); note.textContent = text; note.style.display = ''; };
     if (snapNote) { say(snapNote, false); snapNote = ''; }
-    const tiles = apps.map((a) => {
-      const icon = icons[a.id] ? h('img', { src: icons[a.id], alt: '' }) : h('div', { class: 'letter', 'aria-hidden': 'true', text: a.name.charAt(0).toUpperCase() });
-      const tile = h('button', { class: 'tile', 'data-id': a.id, 'aria-label': (editing ? 'Remove ' : 'Open ') + a.name, title: editing ? 'Remove ' + a.name + ' from this list' : 'Open ' + a.name + ' (Shift+click: open side by side with Workstation)', onclick: async (ev) => {
+    const makeTile = (a) => {
+      const icon = icons[a.id] ? h('img', { src: icons[a.id], alt: '' }) : h('div', { class: 'letter', 'aria-hidden': 'true', text: (a.label || a.name).charAt(0).toUpperCase() });
+      const shown = a.label || a.name;
+      return h('button', { class: 'tile', 'data-id': a.id, 'aria-label': (editing ? 'Remove ' : 'Open ') + shown, title: editing ? 'Remove ' + shown + ' from this list (drag it onto a group name to move it)' : 'Open ' + shown + ' (Shift+click: open side by side with Workstation)', onclick: async (ev) => {
         if (editing) {
           const r = await window.cc.removeApp(a.id);
           if (r && r.ok) { await reloadApps(); } else say((r && r.error) || 'Could not remove it.', false);
           return;
         }
         if (ev && ev.shiftKey && window.cc.snapApp) {
-          say('Opening ' + a.name + ' beside Workstation…', true);
+          say('Opening ' + shown + ' beside Workstation…', true);
           const r = await window.cc.snapApp(a.id);
-          if (!(r && r.ok)) say((r && r.error) || 'Could not place ' + a.name + '.', false);
+          if (!(r && r.ok)) say((r && r.error) || 'Could not place ' + shown + '.', false);
           else { snapped = true; snapNote = r.note || ''; renderApps(); }
           return;
         }
         const r = await window.cc.launchApp(a.id);
-        if (!(r && r.ok)) say((r && r.error) || 'Could not start ' + a.name + '.', false); else note.style.display = 'none';
-      } }, icon, h('span', { class: 'nm', text: a.name }), editing && h('span', { class: 'rm', 'aria-hidden': 'true', text: '×' }));
-      return tile;
+        if (!(r && r.ok)) say((r && r.error) || 'Could not start ' + shown + '.', false); else note.style.display = 'none';
+      } }, icon, h('span', { class: 'nm', text: shown }), editing && h('span', { class: 'rm', 'aria-hidden': 'true', text: '×' }));
+    };
+    const moveTo = async (id, group) => {
+      const r = await window.cc.setAppGroup(id, group);
+      if (r && r.ok) { newGroupOpen = false; await reloadApps(); } else say((r && r.error) || 'Could not move it.', false);
+    };
+    const groups = groupedApps();
+    const showHeads = groups.length > 1 || (groups.length === 1 && groups[0].name);
+    const blocks = [];
+    groups.forEach((g) => {
+      const label = g.name || OTHER;
+      const isCollapsed = collapsed.has(label) && !editing;
+      const grid = h('div', { class: 'tiles' }, g.apps.map(makeTile));
+      if (showHeads) {
+        const head = h('button', { class: 'ghead', 'aria-expanded': String(!isCollapsed), title: 'Show or hide this group', onclick: () => { if (collapsed.has(label)) collapsed.delete(label); else collapsed.add(label); saveCollapsed(collapsed); renderApps(); },
+          ondragover: (ev) => { if (editing) { ev.preventDefault(); head.classList.add('droptarget'); } },
+          ondragleave: () => head.classList.remove('droptarget'),
+          ondrop: (ev) => { head.classList.remove('droptarget'); if (!editing) return; ev.preventDefault(); const id = ev.dataTransfer && ev.dataTransfer.getData('text/plain'); if (id && apps.some((a) => a.id === id)) moveTo(id, g.name); } },
+          h('span', { class: 'chev', 'aria-hidden': 'true', text: isCollapsed ? '▸' : '▾' }), h('span', { text: label }), h('span', { class: 'cnt', text: String(g.apps.length) }));
+        blocks.push(head);
+      }
+      if (!isCollapsed) {
+        blocks.push(grid);
+        makeSortable(grid, {
+          item: '.tile', axis: 'x', idOf: (t) => t.dataset.id || null,
+          onReorder: async (ids, focusId) => {
+            const all = groups.flatMap((x) => (x === g ? ids : x.apps.map((a) => a.id)));
+            const r = await window.cc.reorderApps(all);
+            if (!(r && r.ok)) { say((r && r.error) || 'Could not move it.', false); return; }
+            await reloadApps();
+            if (focusId) { const t = document.querySelector('.tile[data-id="' + focusId + '"]'); if (t) t.focus(); }
+          },
+        });
+      }
     });
-    const add = h('button', { class: 'tile add', 'aria-label': 'Add an app', title: 'Add a program from this computer', onclick: async () => {
-      const r = await window.cc.addApp();
-      if (r && r.ok && !r.cancelled) { await reloadApps(); say('Added ' + r.name + '.', true); }
-      else if (r && !r.ok) say(r.error || 'Could not add it.', false);
-    } }, h('div', { class: 'plus', 'aria-hidden': 'true', text: '+' }), h('span', { class: 'nm', text: 'Add app' }));
-    const tilesBox = h('div', { class: 'tiles' }, tiles, !editing && add);
+    if (editing) {
+      // drop a tile here to start a new group
+      const input = h('input', { type: 'text', maxlength: '30', placeholder: 'Group name', 'aria-label': 'New group name', style: 'flex:1;min-width:0' });
+      const pending = { id: null };
+      const zone = h('div', { class: 'newgroup', ondragover: (ev) => { ev.preventDefault(); zone.classList.add('droptarget'); }, ondragleave: () => zone.classList.remove('droptarget'),
+        ondrop: (ev) => { ev.preventDefault(); zone.classList.remove('droptarget'); const id = ev.dataTransfer && ev.dataTransfer.getData('text/plain'); if (id && apps.some((a) => a.id === id)) { pending.id = id; newGroupOpen = true; zone.replaceChildren(h('span', { class: 'muted', text: 'Name the new group:' }), input, h('button', { onclick: () => { const n = input.value.trim(); if (n && pending.id) moveTo(pending.id, n); } }, 'Create')); input.focus(); } } },
+        h('span', { class: 'muted', text: 'Drop a tile here to start a new group' }));
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { const n = input.value.trim(); if (n && pending.id) moveTo(pending.id, n); } });
+      blocks.push(zone);
+    } else {
+      const add = h('button', { class: 'tile add', 'aria-label': 'Add an app', title: 'Add a program from this computer', onclick: async () => {
+        const r = await window.cc.addApp();
+        if (r && r.ok && !r.cancelled) { await reloadApps(); say('Added ' + r.name + '.', true); }
+        else if (r && !r.ok) say(r.error || 'Could not add it.', false);
+      } }, h('div', { class: 'plus', 'aria-hidden': 'true', text: '+' }), h('span', { class: 'nm', text: 'Add app' }));
+      blocks.push(h('div', { class: 'tiles' }, add));
+    }
     aside.replaceChildren(h('div', { class: 'card' },
       h('div', { class: 'aside-head' }, h('h2', { style: 'margin:0', text: 'Apps' }),
         h('span', {}, snapped && h('button', { class: 'ghost', title: 'Put Workstation back to its previous size', onclick: async () => { await window.cc.restoreLayout(); snapped = false; renderApps(); } }, 'Restore size'),
           apps.length > 0 && h('button', { class: 'ghost', onclick: () => { editing = !editing; renderApps(); } }, editing ? 'Done' : 'Edit'))),
-      tilesBox,
-      !apps.length && h('p', { class: 'muted', style: 'font-size:12.5px;margin:10px 0 0', text: apps.length ? 'Drag a tile to move it, or use Alt+Shift+Arrow keys on a tile.' : 'Add programs from this computer to open them from here. They open in their own windows, outside Transform Workstation.' }),
+      blocks,
+      !apps.length && h('p', { class: 'muted', style: 'font-size:12.5px;margin:10px 0 0', text: 'Add programs from this computer to open them from here. They open in their own windows, outside Transform Workstation.' }),
+      editing && apps.length > 0 && h('p', { class: 'muted', style: 'font-size:12.5px;margin:10px 0 0', text: 'Click a tile to remove it. Drag a tile onto a group name to move it there, or within its group to re-order.' }),
       note));
-    makeSortable(tilesBox, {
-      item: '.tile', axis: 'x', idOf: (t) => t.dataset.id || null,
-      onReorder: async (ids, focusId) => {
-        const r = await window.cc.reorderApps(ids);
-        if (!(r && r.ok)) { say((r && r.error) || 'Could not move it.', false); return; }
-        await reloadApps();
-        if (focusId) { const t = document.querySelector('.tile[data-id="' + focusId + '"]'); if (t) t.focus(); }
-      },
-    });
   }
 
   let snapped = false;
