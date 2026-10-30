@@ -64,6 +64,13 @@
       "file": "renderer/calendar.html"
     },
     {
+      "id": "calweb",
+      "label": "Calendar (web)",
+      "icon": "calendar",
+      "type": "web",
+      "url": "https://outlook.office.com/calendar/"
+    },
+    {
       "id": "teams",
       "label": "Teams",
       "icon": "users",

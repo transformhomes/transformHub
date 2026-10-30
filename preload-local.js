@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('cc', {
   listBackups: () => ipcRenderer.invoke('settings:backups'),
   restoreBackup: (name) => ipcRenderer.invoke('settings:restore-backup', name),
   reorderApps: (ids) => ipcRenderer.invoke('app:reorder', ids),
+  setAppGroup: (id, group) => ipcRenderer.invoke('app:set-group', id, group),
   appIcons: () => ipcRenderer.invoke('app:icons'),
   addApp: () => ipcRenderer.invoke('app:add'),
   removeApp: (id) => ipcRenderer.invoke('app:remove', id),
