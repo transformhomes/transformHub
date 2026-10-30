@@ -15,12 +15,17 @@
   .crumbs .here { color:var(--fg); font-weight:600; padding:3px 8px; }
   .actions { margin:12px 0 14px; }
   .files { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  .frow { display:grid; grid-template-columns:minmax(0,1fr) 130px 80px; gap:12px; align-items:center; width:100%; text-align:left;
+  .frow { display:grid; grid-template-columns:var(--cn,minmax(0,1fr)) var(--cm,130px) var(--cs,80px); gap:12px; align-items:center; width:100%; text-align:left;
     background:transparent; border:0; border-bottom:1px solid var(--line); border-radius:0; padding:8px 12px; cursor:pointer; }
   .frow:last-child { border-bottom:0; }
   .frow:hover { background:var(--hover); }
   .frow.head { cursor:default; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; background:var(--panel); }
   .frow.head:hover { background:var(--panel); }
+  .frow.head .hc { position:relative; cursor:pointer; user-select:none; white-space:nowrap; overflow:visible; }
+  .frow.head .hc:hover { color:var(--fg); }
+  .frow.head .rz { position:absolute; top:-8px; bottom:-8px; right:-10px; width:12px; cursor:col-resize; }
+  .frow.head .rz::after { content:''; position:absolute; top:6px; bottom:6px; left:5px; width:1px; background:var(--line); }
+  .frow.head .rz:hover::after { background:var(--accent); width:2px; }
   .frow .n { display:flex; align-items:center; gap:10px; min-width:0; }
   .frow .n span.t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .frow .m { color:var(--muted); font-size:12.5px; }
@@ -356,9 +361,55 @@
     ];
   }
 
+  // ---- column widths and sorting (remembered on this computer) ----
+  const COLS = { cn: null, cm: 130, cs: 80 }; // cn = Name width in pixels, or null to fill the space
+  const SORT = { key: 'name', dir: 1 };
+  try {
+    const sv = JSON.parse(localStorage.getItem('th-explorer-cols') || 'null');
+    if (sv) {
+      if (Number.isFinite(sv.cn) && sv.cn >= 120 && sv.cn <= 2000) COLS.cn = sv.cn;
+      if (Number.isFinite(sv.cm) && sv.cm >= 70 && sv.cm <= 400) COLS.cm = sv.cm;
+      if (Number.isFinite(sv.cs) && sv.cs >= 50 && sv.cs <= 300) COLS.cs = sv.cs;
+      if (['name', 'mtime', 'size'].includes(sv.key)) SORT.key = sv.key;
+      if (sv.dir === 1 || sv.dir === -1) SORT.dir = sv.dir;
+    }
+  } catch { /* defaults */ }
+  const saveCols = () => { try { localStorage.setItem('th-explorer-cols', JSON.stringify({ ...COLS, key: SORT.key, dir: SORT.dir })); } catch { /* not remembered */ } };
+  const applyCols = (el) => {
+    el.style.setProperty('--cn', COLS.cn ? COLS.cn + 'px' : 'minmax(0,1fr)');
+    el.style.setProperty('--cm', COLS.cm + 'px');
+    el.style.setProperty('--cs', COLS.cs + 'px');
+  };
+  const sortedEntries = (entries) => entries.slice().sort((a, b) => {
+    if (a.dir !== b.dir) return a.dir ? -1 : 1; // folders stay on top, as in File Explorer
+    let r;
+    if (SORT.key === 'mtime') r = (a.mtime || 0) - (b.mtime || 0);
+    else if (SORT.key === 'size') r = (a.dir ? 0 : a.size || 0) - (b.dir ? 0 : b.size || 0);
+    else r = 0;
+    const byName = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    return SORT.key === 'name' ? byName * SORT.dir : (r * SORT.dir || byName);
+  });
+  function headCell(label, key, prop, min, max, nameCol) {
+    const th = h('span', { class: 'hc', title: 'Click to sort. Drag the edge to resize.', onclick: () => {
+      if (SORT.key === key) SORT.dir = -SORT.dir; else { SORT.key = key; SORT.dir = key === 'name' ? 1 : -1; }
+      saveCols(); render();
+    } }, label + (SORT.key === key ? (SORT.dir === 1 ? ' ▲' : ' ▼') : ''));
+    const rz = h('span', { class: 'rz', role: 'separator', 'aria-hidden': 'true', onclick: (e) => e.stopPropagation(), onpointerdown: (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const startX = e.clientX, start = th.getBoundingClientRect().width;
+      rz.setPointerCapture(e.pointerId);
+      const move = (ev) => { COLS[prop] = Math.max(min, Math.min(max, Math.round(start + ev.clientX - startX))); document.querySelectorAll('.files').forEach(applyCols); };
+      const up = () => { rz.removeEventListener('pointermove', move); rz.removeEventListener('pointerup', up); rz.removeEventListener('pointercancel', up); saveCols(); };
+      rz.addEventListener('pointermove', move); rz.addEventListener('pointerup', up); rz.addEventListener('pointercancel', up);
+    }, ondblclick: (e) => { e.stopPropagation(); COLS[prop] = nameCol ? null : (prop === 'cm' ? 130 : 80); document.querySelectorAll('.files').forEach(applyCols); saveCols(); } });
+    th.append(rz);
+    return th;
+  }
   function buildList(p, entries, curPath, onDir, onFile) {
+    entries = sortedEntries(entries);
     const list = h('div', { class: 'files', role: 'list' },
-      h('div', { class: 'frow head', role: 'presentation' }, h('span', { text: 'Name' }), h('span', { text: 'Modified' }), h('span', { text: 'Size' })));
+      h('div', { class: 'frow head', role: 'presentation' }, headCell('Name', 'name', 'cn', 120, 2000, true), headCell('Modified', 'mtime', 'cm', 70, 400), headCell('Size', 'size', 'cs', 50, 300)));
+    applyCols(list);
     if (!entries.length) list.append(h('div', { class: 'empty', style: 'padding:14px', text: 'This folder is empty. Drop files here to add them.' }));
     entries.forEach((en) => {
       const rel = join(curPath, en.name);
