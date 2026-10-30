@@ -38,6 +38,8 @@ Open Explorer and the folder tree sits on the left of the page, with the folder 
 
 Files are only ever moved or copied from here, never deleted or overwritten (see Drag and drop below). Nothing else is changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
 
+Your OneDrive folder (for example `D:\OneDrive - Transform Homes`) is found automatically and listed under This PC. It is the folder on your computer that OneDrive syncs, so files you drag in there upload to OneDrive. To hide it, add `"oneDrive": false` inside `"explorer"` in your settings file.
+
 Under the drives you also get quick links to your own Desktop, Downloads, Documents, Pictures, Music and Videos folders (wherever Windows keeps them, including OneDrive). To hide them, add `"explorer": { "quickFolders": false }` to your settings file.
 
 Drives: on Windows, C:\ and D:\ are shown if they exist. To change that, add this to your settings file (a drive letter, or a name and folder):
@@ -48,11 +50,12 @@ Drives: on Windows, C:\ and D:\ are shown if they exist. To change that, add thi
 - **Move a file or folder:** drag it onto a folder in the list, the folder tree, or the path at the top. It is moved. Hold **Ctrl** to copy instead.
 - **Drop files in from Windows:** drag files from File Explorer or the desktop onto a folder (or onto the open folder's page). They are copied in.
 - **Drag a file out:** hold **Alt** while you drag a file, then drop it on the desktop, a Windows folder, an email or Teams. This copies it; the original stays.
+- **Sort and resize columns:** click **Name**, **Modified** or **Size** at the top of a folder list to sort by it (click again to reverse; folders always stay on top). Drag the thin line at the edge of a column heading to resize it, or double-click that line to reset it. Your choices are remembered.
 - **Split view:** click **Split view** to show a second folder beside the first. Click a pane, then pick a folder in the tree (or click folders in that pane) to change it. You can drag between the two panes. **Close split view** (or the ✕) goes back to one.
 - A name clash never overwrites anything: the new item gets a "(2)" on its name. A folder cannot be dropped into itself, and drives and project folders themselves cannot be moved. Moving to a different drive copies the item, then removes the original.
 
 ## Two tabs side by side (inside Workstation)
-**Shift+click** any tab in the left rail to show it beside the tab you are on: the current tab stays on the left and the Shift+clicked one opens on the right (for example the Explorer on the left and your Excel tab on the right). Click a tab normally to change the left side, or click the tab that is on the right to make it the main one. **Close split** (top right) goes back to one tab. The Browser tab always uses the whole area. To move a file from the Explorer into a web page such as Excel, hold **Alt** and drag the file across.
+**Shift+click** any tab in the left rail to show it beside the tab you are on: the current tab stays on the left and the Shift+clicked one opens on the right (for example the Explorer on the left and your Excel tab on the right). Click a tab normally to change the left side, or click the tab that is on the right to make it the main one. **Close split** (top right) goes back to one tab. Shift+click the tab you are already on (a website tab such as Buildertrend) to open a second, separate copy of it on the right. Closing the split closes that copy. The Browser tab always uses the whole area. To move a file from the Explorer into a web page such as Excel, hold **Alt** and drag the file across.
 
 ## Side by side with another program
 **Shift+click** a program tile (a desktop program such as Excel or Word; on Home, or in the Explorer's Apps list) to open it beside Workstation: Workstation takes the left half of the screen and the program the right half, on the screen Workstation is on. Then hold **Alt** and drag a file from the Explorer onto the program (for example a spreadsheet onto Excel) to open or insert it there. **Restore size** (next to Edit in the Apps box on Home) puts Workstation back as it was. If the program takes more than about 20 seconds to open, only Workstation is resized; Shift+click again once it is open. This only moves windows: it does not put the program inside Workstation.
@@ -75,6 +78,8 @@ List the programs you want one click away in your settings file. They appear und
 The path must be the program's `.exe` file. Only programs in this list can be started, and the Explorer itself still never runs programs or scripts.
 
 The same list fills the **Apps** panel on the right of the Home page, with each program's own icon. Click a tile to open that program in its own window, outside Transform Workstation. **Add app** lets you pick a program's `.exe` file from this computer; **Edit** shows a cross on each tile to remove it. Adding or removing rewrites the `apps` list in your settings file (up to 24 apps), keeping a copy of the old file the first time as `config.before-apps.bak.json`. Removing only takes the app off the list; it never uninstalls anything.
+
+**Groups:** the Apps panel on Home is split into groups (Office, AI and creative, Utilities, and Other). Well-known programs are placed by name; anything else goes under Other. Click a group's name to hide or show it. Click **Edit**, then drag a tile onto a group's name to move it, or onto "Drop a tile here to start a new group". The choice is saved as `"group"` on that app in your settings file (a copy of the old file is kept the first time as `config.before-groups.bak.json`). Tiles show a friendly name such as Word, Excel or Copilot.
 
 **File Explorer:** add Windows' own File Explorer as an app with `{ "name": "File Explorer", "path": "C:\\Windows\\explorer.exe" }` (or choose `C:\Windows\explorer.exe` with Add app). It opens a normal Explorer window.
 
@@ -114,6 +119,21 @@ Not built: Chrome extensions, bookmarks, a history page, find in page, saved pas
 Home shows how many unread emails you have, how many appointments are today and the next one, and a month calendar with dots on days that have events (click a day to see its events). The numbers come from **classic Outlook** running on this computer (Windows only). Transform Workstation only talks to an Outlook that is already open, never starts one, and reads just the unread count in the Inbox and each appointment's title and times (private appointments show as "Private appointment"). It writes and sends nothing. If Outlook is closed, Home says so. It refreshes about every two minutes and when you return to the window.
 
 The new Outlook (the web-based one) cannot be read this way. To turn the feature off, add `"outlookDesktop": false` to your settings file.
+
+## Email attachments: drag them to another tab or program
+In the Inbox tab, open an attachment's menu and choose **Download**. Workstation saves it straight away (no Save window) into `Downloads\Workstation attachments`, and a chip with its name appears in the header bar (up to three show; the rest are counted). With a second tab open beside it (**Shift+click** a tab in the rail) or a program placed beside Workstation, drag the chip onto that tab or program to hand it the real file, for example onto an Excel, OneDrive or Claude tab. A name clash never overwrites an older file: the new one gets a "(2)". The **✕** clears the chips; the files stay in your Downloads folder. Only downloads from the Inbox tab are saved this way; other tabs still show the normal Save window. Dragging an attachment straight out of the email page is not possible, because Outlook only offers a link to it that other tabs cannot accept as a file.
+
+## Calendar (web) tab
+A **Calendar (web)** tab sits beside the built-in Calendar. It is Outlook Calendar on the web, so you can open meetings, move them, edit them and add new ones, using the same Microsoft sign-in as the Inbox tab. The old built-in Calendar tab is hidden the first time the app starts after this update (bring it back in Settings, Tabs, by un-hiding Calendar). Links to it from Home and search open the Calendar (web) tab instead; Home still shows your events. The web tab is added once, the first time the app starts after this update (a copy of your old settings file is kept as `config.before-calweb.bak.json`). If you remove it in Settings it stays removed. The built-in Calendar and the Home page still show your events as before.
+
+## Sleeping tabs (saves memory)
+A website tab you have not looked at for 30 minutes is closed to free memory, and loads again, fresh, when you click it. Anything unsaved in that page is lost, so save first (Word and Excel on the web save as you go). Tabs named like Inbox, Outlook, Mail or Teams never sleep, so their messages keep arriving, and neither does a tab that is playing sound or in a call. The built-in pages, the Browser tab and the password vault are not affected. To change it, add this to your settings file (the `never` list replaces the default, so include every tab you want kept awake; use a tab's id or name):
+
+       "sleepTabs": { "minutes": 45, "never": ["mail", "teams", "claude"] }
+
+or `"sleepTabs": false` to turn it off. The minutes can be 5 to 480.
+
+The hidden window that reads Microsoft To Do is also closed 30 seconds after each refresh or tick, and opened again when next needed, so it no longer sits in memory between the 10-minute refreshes. Closing the second copy of a tab (Close split) frees that copy straight away.
 
 ## Spell check
 Spell check is on in every tab and page (Home, Tasks, Dr. MD, Outlook, Teams, Claude, the Browser and the rest), in **Australian English**. Misspelled words get a red underline; right-click one for suggestions or **Add to dictionary** (words you add are remembered). Right-click in any text box also gives Cut, Copy and Paste. If the Australian dictionary is not available on your computer it falls back to British, then US English. To choose others, add for example `"spellCheckLanguages": ["en-AU", "en-GB"]` to your settings file. The first time a language is used, Windows or Electron may need a moment (and an internet connection) to fetch its dictionary. Some web apps (Outlook, Teams) draw their own right-click menus, and those menus may not show spelling suggestions even though the underline is there.
