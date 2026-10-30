@@ -141,6 +141,27 @@ function loadConfig() {
       return defaults;
     }
     cfg.sections = cleanSections(cfg.sections, defaults.sections);
+    // One time only: add an Outlook Calendar (web) tab beside the built-in Calendar so meetings can be opened and edited. Remove it in Settings and it stays removed.
+    if (!cfg.calwebAdded && !cfg.sections.some((x) => x.id === 'calweb' || (x.type === 'web' && /outlook\.office\.com\/calendar/i.test(x.url || '')))) {
+      const entry = { id: 'calweb', label: 'Calendar (web)', icon: 'calendar', type: 'web', url: 'https://outlook.office.com/calendar/' };
+      const place = (list) => { const at = list.findIndex((x) => x && x.id === 'calendar'); list.splice(at >= 0 ? at + 1 : list.length, 0, entry); };
+      try {
+        updateConfigFile((raw) => { if (Array.isArray(raw.sections)) place(raw.sections); raw.calwebAdded = true; }, 'config.before-calweb.bak.json');
+        place(cfg.sections);
+        cfg.calwebAdded = true;
+      } catch (err) { console.error('Could not add the Outlook Calendar tab:', err.message); }
+    }
+    // One time only: once the Outlook Calendar (web) tab exists, hide the old built-in Calendar tab. Bring it back any time in Settings, Tabs.
+    if (!cfg.calendarHidden) {
+      const cal = cfg.sections.find((x) => x.id === 'calendar');
+      if (cal && cal.type !== 'disabled' && cfg.sections.some((x) => x.id === 'calweb')) {
+        try {
+          updateConfigFile((raw) => { const c = Array.isArray(raw.sections) && raw.sections.find((x) => x && x.id === 'calendar'); if (c) c.type = 'disabled'; raw.calendarHidden = true; }, 'config.before-hide-calendar.bak.json');
+          cal.type = 'disabled';
+          cfg.calendarHidden = true;
+        } catch (err) { console.error('Could not hide the built-in Calendar tab:', err.message); }
+      }
+    }
     return cfg;
   } catch (err) {
     console.error('Bad config.json, using defaults:', err.message);
@@ -177,6 +198,22 @@ function driveRoots() {
     if (seen.has(id)) continue;
     seen.add(id);
     out.push({ id, name, path: p });
+  }
+  // Your OneDrive folder(s), found from Windows (the OneDrive settings it sets) and by looking for a folder named "OneDrive..." at the top of C: and D:.
+  // Turn off with "explorer": { "oneDrive": false }. Another location can be added with "drives": [{ "name": "OneDrive", "path": "..." }].
+  if (!(cfg && cfg.oneDrive === false)) {
+    const cands = [];
+    for (const k of ['OneDriveCommercial', 'OneDrive', 'OneDriveConsumer']) if (process.env[k]) cands.push(process.env[k]);
+    for (const r of ['D:\\', 'C:\\']) { try { for (const n of fs.readdirSync(r)) if (/^OneDrive( - .+)?$/i.test(n)) cands.push(path.join(r, n)); } catch { /* no such drive */ } }
+    const norm = (x) => path.resolve(x).toLowerCase();
+    for (const p of cands) {
+      try { if (!path.isAbsolute(p) || !fs.statSync(p).isDirectory()) continue; } catch { continue; }
+      const name = path.basename(p) || 'OneDrive';
+      const id = 'drive:onedrive-' + (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'onedrive');
+      if (seen.has(id) || out.some((o) => norm(o.path) === norm(p))) continue;
+      seen.add(id);
+      out.push({ id, name, path: p });
+    }
   }
   // Your own Desktop, Downloads, Documents, Pictures, Music and Videos folders, listed after the drives.
   // Windows supplies the real location (so a OneDrive-redirected Documents folder works). Turn off with "explorer": { "quickFolders": false }.
@@ -220,8 +257,19 @@ const KNOWN_APPS = {
   powerpnt: { label: 'PowerPoint', types: ['.pptx', '.ppt', '.ppsx', '.potx', '.odp'] },
   acrobat: { label: 'Acrobat', types: ['.pdf'] },
   acrord32: { label: 'Acrobat Reader', types: ['.pdf'] },
+  mscopilot: { label: 'Copilot', types: [] },
+  copilot: { label: 'Copilot', types: [] },
   'notepad++': { label: 'Notepad++', types: ['.txt', '.md', '.json', '.log', '.xml', '.csv', '.js', '.css', '.html', '.ini', '.yml', '.yaml'] },
 };
+// Which group a tile sits in on the Home page. A group you choose yourself (kept as "group" in the settings file) wins;
+// otherwise well-known programs are placed by name, and anything else goes under "Other" (an empty group name).
+const AUTO_GROUPS = [
+  ['Office', /word|excel|powerpoint|powerpnt|acrobat|revu|bluebeam|outlook/i],
+  ['AI and creative', /copilot|clipchamp|voicebox|antigravity|claude|chatgpt|canva/i],
+  ['Utilities', /notepad|explorer|typora|calculator|paint|terminal|powershell/i],
+];
+const autoGroup = (name, p) => { const t = String(name) + ' ' + path.basename(String(p)); const hit = AUTO_GROUPS.find(([, re]) => re.test(t)); return hit ? hit[0] : ''; };
+const cleanGroup = (g) => String(g == null ? '' : g).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 30);
 const knownApp = (p) => KNOWN_APPS[path.basename(String(p)).replace(/\.exe$/i, '').toLowerCase()] || null;
 const appIdFor = (name) => 'app:' + (String(name).trim().slice(0, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app');
 function appList() {
@@ -238,7 +286,8 @@ function appList() {
     const known = knownApp(a.path);
     if (!types.length && known) types = known.types.slice();
     const icon = validIconPath(a.icon) ? a.icon : null;
-    out.push({ id, name, label: known ? known.label : name, path: a.path, types, icon });
+    const group = typeof a.group === 'string' ? cleanGroup(a.group) : autoGroup(name, a.path);
+    out.push({ id, name, label: known ? known.label : name, path: a.path, types, icon, group });
   }
   return out;
 }
@@ -507,6 +556,14 @@ async function openInWeb(rootId, rel) {
     } catch { /* not a URL */ }
     return null;
   };
+  // Microsoft often lands on your OneDrive host without the /personal/... part in the address. The page itself knows it.
+  const personalFrom = async (contents) => {
+    try {
+      if (!/\.sharepoint\.com$/i.test(hostOf(contents.getURL()))) return null;
+      const u = await contents.executeJavaScript("fetch('/_api/SP.UserProfiles.PeopleManager/GetMyProperties?$select=PersonalUrl',{headers:{Accept:'application/json;odata=nometadata'},credentials:'include'}).then((r)=>r.ok?r.json():null).then((j)=>(j&&j.PersonalUrl)||null).catch(()=>null)");
+      return typeof u === 'string' ? siteFrom(u) : null;
+    } catch { return null; }
+  };
   try {
     const wc = w.webContents;
     wc.setUserAgent(chromeUserAgent());
@@ -514,7 +571,7 @@ async function openInWeb(rootId, rel) {
     // 1. The OneDrive tab, if it has already been opened and is showing your files, tells us where your OneDrive lives.
     const odSec = sections.find((x) => x.type === 'web' && /onedrive/i.test(x.label));
     const odView = odSec && views.get(odSec.id);
-    if (odView && !odView.webContents.isDestroyed()) { site = siteFrom(odView.webContents.getURL()); if (!site) seen = hostOf(odView.webContents.getURL()); }
+    if (odView && !odView.webContents.isDestroyed()) { site = siteFrom(odView.webContents.getURL()); if (!site) site = await personalFrom(odView.webContents); if (!site) seen = hostOf(odView.webContents.getURL()); }
     // 2. Otherwise ask Microsoft, in a hidden window, where "OneDrive" goes.
     if (!site) {
       for (const start of ['https://www.office.com/launch/onedrive', 'https://www.microsoft365.com/launch/onedrive']) {
@@ -525,6 +582,7 @@ async function openInWeb(rootId, rel) {
           const href = wc.getURL();
           seen = hostOf(href) || seen;
           site = siteFrom(href);
+          if (!site && Date.now() - t0 > 4000 && /\.sharepoint\.com$/i.test(hostOf(href))) site = await personalFrom(wc);
           if (site) break;
           if (/^login\.(microsoftonline|live)\.com$/i.test(hostOf(href)) && Date.now() - t0 > 12000) return { ok: false, error: 'Please sign in to Microsoft in the OneDrive or Inbox tab first, then try again.' };
         }
@@ -649,7 +707,15 @@ function broadcastTodo(state) {
   });
 }
 
+// The hidden To Do window is only needed for a few seconds every 10 minutes, so it is closed when idle and opened again when needed.
+let todoIdleTimer = null;
+function releaseTodoView() {
+  todoIdleTimer = null;
+  if (todoView && !todoView.isDestroyed()) todoView.destroy();
+  todoView = null;
+}
 function ensureTodoView() {
+  if (todoIdleTimer) { clearTimeout(todoIdleTimer); todoIdleTimer = null; }
   if (todoView && !todoView.webContents.isDestroyed()) return todoView;
   // A hidden window drawn off-screen (no real window). Microsoft's task list only fills in when the page
   // believes it is visible, so it must not be parked outside the screen or hidden the normal way.
@@ -670,6 +736,7 @@ let todoLock = Promise.resolve();
 function withTodoLock(fn) {
   const run = todoLock.then(fn, fn);
   todoLock = run.catch(() => {});
+  run.catch(() => {}).then(() => { if (todoIdleTimer) clearTimeout(todoIdleTimer); todoIdleTimer = setTimeout(releaseTodoView, 30000); });
   return run;
 }
 function scrapeTodo(routes, source) { return withTodoLock(() => scrapeTodoNow(routes, source)); }
@@ -693,7 +760,10 @@ function completeTodo(title) {
       if (!r.clicked) return { ok: false, error: 'Could not find that task in Microsoft To Do. It may be on another list or already ticked.' };
       await new Promise((res) => setTimeout(res, 2000));
       const after = await wc.executeJavaScript(TODO_SOURCE);
-      const still = after && (after.tasks || []).some((t) => !t.done && t.title.slice(0, 300) === String(title).slice(0, 300));
+      // A repeating task is replaced by its next occurrence with the same title, so it is only "still there" if it has the same due date as before.
+      const want = String(title).slice(0, 300);
+      const was = (r.tasks || []).find((t) => !t.done && t.title.slice(0, 300) === want);
+      const still = after && (after.tasks || []).some((t) => !t.done && t.title.slice(0, 300) === want && (!was || (t.due || '') === (was.due || '')));
       if (still) return { ok: false, error: 'Microsoft did not confirm the tick. Please check To Do.' };
       return { ok: true };
     } catch {
@@ -919,23 +989,34 @@ function splitRects() {
   const w = Math.max(0, Math.floor((b.width - GAP) / 2));
   return { a: { ...b, width: w }, b: { ...b, x: b.x + w + GAP, width: Math.max(0, b.width - w - GAP) } };
 }
-function notifySplit() { if (win && !win.isDestroyed()) win.webContents.send('cc:split', secondId); }
+function notifySplit() { if (win && !win.isDestroyed()) win.webContents.send('cc:split', secondId ? secondId.split('#')[0] : null); }
+// Takes the right-hand tab off the screen. A second copy of the same tab ("buildertrend#2") is closed for good; a normal tab is only hidden.
+function dropSecondView(key) {
+  const v = views.get(key);
+  if (!v) return;
+  if (win && !win.isDestroyed()) { try { win.contentView.removeChildView(v); } catch { /* already gone */ } }
+  if (key.includes('#')) { views.delete(key); if (!v.webContents.isDestroyed()) v.webContents.close(); }
+}
 function closeSecond() {
   if (!secondId) return;
-  const v = views.get(secondId);
-  if (v && win && !win.isDestroyed()) { try { win.contentView.removeChildView(v); } catch { /* already gone */ } }
+  lastUsed.set(secondId.split('#')[0], Date.now());
+  dropSecondView(secondId);
   secondId = null;
   layout();
   notifySplit();
 }
 function selectBeside(id) {
   const section = sections.find((x) => x.id === id);
-  if (!win || !section || section.type === 'disabled' || section.type === 'browser' || !currentId || id === currentId) return false;
+  if (!win || !section || section.type === 'disabled' || section.type === 'browser' || !currentId) return false;
+  const twin = id === currentId; // Shift+click on the tab you are already on opens a second copy of it (website tabs only)
+  if (twin && section.type !== 'web') return false;
   if (isBrowserSection(currentId)) { select(id); return true; } // the Browser tab cannot be split; just go there
-  if (secondId && secondId !== id && views.has(secondId)) { try { win.contentView.removeChildView(views.get(secondId)); } catch { /* already gone */ } }
-  if (!views.has(id)) views.set(id, createView(section));
-  secondId = id;
-  win.contentView.addChildView(views.get(id));
+  const key = twin ? id + '#2' : id;
+  lastUsed.set(id, Date.now());
+  if (secondId && secondId !== key && views.has(secondId)) dropSecondView(secondId);
+  if (!views.has(key)) views.set(key, createView(section));
+  secondId = key;
+  win.contentView.addChildView(views.get(key));
   if (paletteOpen && paletteView) win.contentView.addChildView(paletteView);
   if (locked) raiseLock();
   layout();
@@ -1064,6 +1145,76 @@ function goBackSection() {
   return true;
 }
 
+// ---- Attachment shelf ----
+// A file downloaded from the Inbox tab (an Outlook attachment's Download button) is saved without a Save dialog into
+// Downloads\Workstation attachments, and shows as a chip in the header. Drag the chip onto the other tab in a split view
+// (or onto a desktop program) to hand it the real file. Nothing is run, and old files are never overwritten.
+const SHELF_MAX = 6;
+let shelf = []; // newest first: { id, name, path }
+let shelfSeq = 0;
+const shelfList = () => shelf.map((x) => ({ id: x.id, name: x.name }));
+function broadcastShelf() { if (win && !win.isDestroyed()) win.webContents.send('shelf:changed', shelfList()); }
+function isInboxContents(wc) {
+  for (const [id, view] of views) {
+    const sec = sections.find((x) => x.id === String(id).split('#')[0]);
+    if (sec && sec.type === 'web' && /inbox|outlook|mail/i.test(sec.id + ' ' + sec.label) && !view.webContents.isDestroyed() && view.webContents === wc) return true;
+  }
+  return false;
+}
+function onWillDownload(_event, item, wc) {
+  if (!wc || !isInboxContents(wc)) return; // other tabs keep the normal Save dialog
+  try {
+    const dir = path.join(app.getPath('downloads'), 'Workstation attachments');
+    fs.mkdirSync(dir, { recursive: true });
+    const clean = String(item.getFilename() || 'attachment').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 150) || 'attachment';
+    const name = freeName(dir, clean);
+    if (!name) return;
+    const full = path.join(dir, name);
+    item.setSavePath(full);
+    item.once('done', (_e, state) => {
+      if (state !== 'completed') return;
+      shelf.unshift({ id: 'att' + (++shelfSeq), name, path: full });
+      shelf = shelf.slice(0, SHELF_MAX);
+      broadcastShelf();
+    });
+  } catch { /* the normal Save dialog appears instead */ }
+}
+
+// ---- Sleeping tabs: a website tab you have not looked at for a while is closed to free memory, and loads again when you click it ----
+// Settings: "sleepTabs": { "minutes": 30, "never": ["inbox", "teams"] }, or "sleepTabs": false to turn it off.
+// Without a "never" list, tabs whose name looks like Inbox, Outlook, Mail or Teams are kept awake so their messages keep arriving.
+const lastUsed = new Map(); // tab id -> when you last left it or were on it
+function sleepSettings() {
+  const c = loadedConfig && loadedConfig.sleepTabs;
+  if (c === false) return null;
+  const minutes = c && Number.isFinite(c.minutes) ? Math.max(5, Math.min(480, Math.round(c.minutes))) : 30;
+  const never = c && Array.isArray(c.never) ? c.never.filter((x) => typeof x === 'string').map((x) => x.toLowerCase()) : null;
+  return { minutes, never };
+}
+function neverSleeps(sec, never) {
+  if (never) return never.includes(String(sec.id).toLowerCase()) || never.includes(String(sec.label).toLowerCase());
+  return /inbox|outlook|mail|teams/i.test(sec.id + ' ' + sec.label);
+}
+function sleepIdleTabs(nowMs) {
+  const cfg = sleepSettings();
+  if (!cfg || !win || win.isDestroyed()) return 0;
+  const now = nowMs || Date.now();
+  let n = 0;
+  for (const [id, view] of [...views]) {
+    if (id === currentId || id === secondId || id.includes('#')) continue;
+    const sec = sections.find((x) => x.id === id);
+    if (!sec || sec.type !== 'web' || isVaultUrl(sec.url) || neverSleeps(sec, cfg.never)) continue;
+    const wc = view.webContents;
+    if (wc.isDestroyed()) { views.delete(id); continue; }
+    if (!lastUsed.has(id) || wc.isCurrentlyAudible()) { lastUsed.set(id, now); continue; } // a call or video keeps it awake
+    if (now - lastUsed.get(id) < cfg.minutes * 60000) continue;
+    views.delete(id);
+    try { wc.close(); } catch { /* already gone */ }
+    n++;
+  }
+  return n;
+}
+
 function enabledSections() { return sections.filter((x) => x.type !== 'disabled' && x.id !== 'settings'); }
 
 function deliverParams(view, params) {
@@ -1073,8 +1224,12 @@ function deliverParams(view, params) {
 }
 
 function select(id, params) {
+  // links to the hidden built-in Calendar (from Home, search and so on) go to the Outlook Calendar tab instead
+  if (id === 'calendar' && sections.some((x) => x.id === 'calendar' && x.type === 'disabled') && sections.some((x) => x.id === 'calweb' && x.type !== 'disabled')) id = 'calweb';
   const section = sections.find((x) => x.id === id);
   if (!section || section.type === 'disabled' || !win) return;
+  lastUsed.set(id, Date.now());
+  if (currentId) lastUsed.set(currentId, Date.now());
   if (section.type === 'browser') closeSecond();           // the Browser tab always has the whole area
   else if (id === secondId) { secondId = null; notifySplit(); } // the tab on the right becomes the main one
 
@@ -1168,7 +1323,7 @@ function reloadCurrent() {
 function isWebContents(contents) {
   if (browserShellIds.has(contents.id) || (browserService && browserService.owns(contents))) return true; // the Browser tab follows the web-site key rules
   for (const [id, view] of views) {
-    const sec = sections.find((x) => x.id === id);
+    const sec = sections.find((x) => x.id === String(id).split('#')[0]);
     if (sec && (sec.type === 'web' || sec.type === 'drmd') && view.webContents === contents) return true;
   }
   return false;
@@ -1285,6 +1440,7 @@ function createWindow() {
         setSpawn: (fn) => { spawnShell = fn; },
         setOutlookRun: (fn) => { outlookRun = fn; outlookService = null; },
         setDialogs: (d) => { testDialogs = d; },
+        sleepIdleTabs, lastUsed, shelfList, onWillDownload, driveRoots, listDir,
       };
       Promise.resolve(require(process.env.CC_TEST_SCRIPT)(ctx))
         .catch((err) => { console.error('TEST SCRIPT FAILED:', err); process.exitCode = 1; })
@@ -1450,7 +1606,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!isLocalSender(e)) return null;
       const projects = (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
       const favs = ui.get().favs.filter((f) => findRoot(f.root));
-      return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, label: x.label, types: x.types })) };
+      return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, label: x.label, types: x.types, group: x.group })) };
     });
     ipcMain.handle('explorer:fav', (e, root, rel, name) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
@@ -1515,6 +1671,17 @@ if (!app.requestSingleInstanceLock()) {
       const picked = new Set(ids.map((x) => byId.get(x)));
       const next = [...ids.map((x) => byId.get(x)), ...raw.filter((a) => !picked.has(a))]; // entries that are not shown stay at the end
       try { updateConfigFile((cfg) => { cfg.apps = next; }, 'config.before-reorder.bak.json'); loadedConfig.apps = next; } catch { return { ok: false, error: 'Could not save your settings file.' }; }
+      return { ok: true };
+    });
+    ipcMain.handle('app:set-group', (e, id, group) => {
+      if (!isLocalSender(e) || typeof id !== 'string' || typeof group !== 'string') return { ok: false, error: 'Not allowed.' };
+      const g = cleanGroup(group);
+      const raw = Array.isArray(loadedConfig.apps) ? loadedConfig.apps : [];
+      if (!raw.some((a) => a && typeof a.name === 'string' && appIdFor(a.name) === id)) return { ok: false, error: 'Unknown app.' };
+      try {
+        updateConfigFile((cfg) => { for (const a of Array.isArray(cfg.apps) ? cfg.apps : []) if (a && typeof a.name === 'string' && appIdFor(a.name) === id) a.group = g; }, 'config.before-groups.bak.json');
+        for (const a of raw) if (a && typeof a.name === 'string' && appIdFor(a.name) === id) a.group = g;
+      } catch { return { ok: false, error: 'Could not save your settings file.' }; }
       return { ok: true };
     });
     ipcMain.handle('app:snap', (e, id) => (isLocalSender(e) && typeof id === 'string' ? snapApp(id) : { ok: false, error: 'Not allowed.' }));
@@ -1778,6 +1945,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('lock:remove', (e, pin) => (isLocalSender(e) && !locked ? lockService().remove(typeof pin === 'string' ? pin : '') : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('lock:now', (e) => (isLocalSender(e) && !locked ? lockNow() : false));
     if (!process.env.CC_TEST_SCRIPT) {
+      setInterval(() => sleepIdleTabs(), 60000);
       setInterval(() => idleCheck(), 15000);
       powerMonitor.on('lock-screen', () => lockNow()); // Windows key + L
       powerMonitor.on('suspend', () => lockNow());     // lid closed or sleep
@@ -1884,6 +2052,15 @@ if (!app.requestSingleInstanceLock()) {
       ses.setPermissionRequestHandler((_wc, permission, cb) => cb(ok(permission)));
       ses.setPermissionCheckHandler((_wc, permission) => ok(permission));
     };
+    session.fromPartition(PARTITION).on('will-download', onWillDownload);
+    ipcMain.handle('shelf:get', (e) => (isLocalSender(e) ? shelfList() : []));
+    ipcMain.on('shelf:clear', (e) => { if (isLocalSender(e)) { shelf = []; broadcastShelf(); } });
+    ipcMain.on('shelf:drag', (e, id) => {
+      if (!isLocalSender(e) || typeof id !== 'string') return;
+      const hit = shelf.find((x) => x.id === id);
+      if (!hit) return;
+      try { if (!fs.statSync(hit.path).isFile()) return; e.sender.startDrag({ file: hit.path, icon: dragIconImage() }); } catch { /* the file was moved or deleted */ }
+    });
     denyMost(session.fromPartition(VAULT_PARTITION)); // the vault page may not ask for the camera, location and so on
     keepSignedIn(session.fromPartition(PARTITION), Array.isArray(loadedConfig.keepSignedIn) ? loadedConfig.keepSignedIn : ['domo.com']);
     ipcMain.handle('cc:current', () => currentId);
