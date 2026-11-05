@@ -27,6 +27,7 @@
   </div>
 
   <div id="list"></div>
+  <div id="todoBox"></div>
 </div>
 
 <script src="common.js"></script>
@@ -55,6 +56,37 @@
     });
     document.querySelectorAll('[data-f]').forEach((b) =>
       b.addEventListener('click', () => { filter = b.dataset.f; render(); }));
+  }
+
+
+  function todoStatusText(td) {
+    const when = td.updated ? new Date(td.updated).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' }) : null;
+    if (td.status === 'ok') return 'Updated ' + when + ' (read-only)';
+    if (td.status === 'signin') return 'Not signed in to Microsoft. Open the Inbox tab, sign in, then refresh.';
+    if (td.status === 'unreadable') return 'Could not read the To Do page (its layout may have changed).' + (when ? ' Showing tasks from ' + when + '.' : '');
+    if (td.status === 'error') return 'Could not refresh.' + (when ? ' Showing tasks from ' + when + '.' : '');
+    return 'Not synced yet.';
+  }
+
+  function renderTodo() {
+    const box = document.getElementById('todoBox');
+    box.replaceChildren();
+    const td = App.todo;
+    if (!td || !td.enabled) return;
+    const open = td.tasks.filter((x) => !x.done);
+    box.append(h('div', { class: 'group-title', text: 'Microsoft To Do (' + open.length + ')' }));
+    box.append(h('div', { class: 'row', style: 'margin:4px 0 8px' },
+      h('span', { class: 'muted', text: todoStatusText(td) }),
+      h('button', { class: 'ghost', id: 'todoRefresh', text: 'Refresh', onclick: async (e) => { e.target.disabled = true; e.target.textContent = 'Refreshing…'; await window.cc.refreshTodo(); } })));
+    open.slice(0, 100).forEach((x) => box.append(h('div', { class: 'task' },
+      h('span', { class: 'ico-todo', 'aria-hidden': 'true', style: 'width:15px;height:15px;border:1.5px solid var(--muted);border-radius:50%;flex:none' }),
+      h('span', { class: 'title', text: x.title }),
+      h('span', { class: 'tag', text: x.list }))));
+    if (!open.length && td.status === 'ok') box.append(h('div', { class: 'empty', text: 'No open To Do tasks.' }));
+    if (td.status === 'unreadable' || (td.status !== 'ok' && td.diag && td.diag.length)) {
+      box.append(h('details', { style: 'margin-top:10px' }, h('summary', { class: 'muted', text: 'Diagnostic (no task text)' }),
+        h('pre', { style: 'white-space:pre;overflow:auto;max-height:420px;user-select:text;font-size:11.5px', text: td.diag.map((d) => JSON.stringify({ ...d, outline: undefined })  + (d.outline && d.outline.length ? '\\n' + d.outline.join('\\n') : '')).join('\\n\\n') })));
+    }
   }
 
   function group(title, tasks, out) {
@@ -90,6 +122,7 @@
     if (!list.children.length) {
       list.append(h('div', { class: 'empty', text: filter === 'done' ? 'Nothing completed yet.' : 'No tasks here. Add one above.' }));
     }
+    renderTodo();
   }
 
   App.init(() => { if (!formProj) setup(); render(); });

@@ -15,12 +15,14 @@
   .dow div { padding:6px 8px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
   .cells { flex:1; grid-template-rows:repeat(6, minmax(0, 1fr)); border-top:1px solid var(--line); border-left:1px solid var(--line); min-height:420px; }
   .cell { border-right:1px solid var(--line); border-bottom:1px solid var(--line); padding:5px 6px; overflow:hidden; cursor:pointer; background:var(--bg); }
-  .cell:hover { background:#13161c; }
-  .cell.other { background:#0c0e12; color:var(--muted); }
+  .cell:hover { background:var(--hover); }
+  .cell.other { background:var(--panel); color:var(--muted); }
   .cell.selected { outline:2px solid var(--accent); outline-offset:-2px; }
   .num { display:inline-grid; place-items:center; min-width:24px; height:24px; border-radius:12px; font-size:12.5px; }
-  .cell.today .num { background:var(--accent); color:#06111f; font-weight:700; }
-  .chip { display:block; margin-top:3px; padding:1px 6px; border-radius:5px; font-size:11.5px; background:var(--accent-bg); color:#cfe3ff;
+  .cell.today .num { background:var(--accent); color:var(--on-accent); font-weight:700; }
+  .chip.feed { background:var(--feed-bg); color:var(--feed-fg); }
+  .sync { font-size:12.5px; color:var(--muted); line-height:1.5; }
+  .chip { display:block; margin-top:3px; padding:1px 6px; border-radius:5px; font-size:11.5px; background:var(--accent-bg); color:var(--chip-fg);
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .more { font-size:11px; color:var(--muted); margin-top:2px; }
   .side h2 { margin-top:22px; }
@@ -64,6 +66,9 @@
 
     <h2>Coming up (next 14 days)</h2>
     <div id="upcoming"></div>
+
+    <h2>Outlook sync</h2>
+    <div id="sync" class="sync"></div>
   </aside>
 </div>
 
@@ -77,14 +82,16 @@
 
   const el = (id) => document.getElementById(id);
 
-  function eventsOn(date) { return sortEvents(App.data.events.filter((e) => e.date === date)); }
+  function eventsOn(date) { return sortEvents(allEvents().filter((e) => e.date === date)); }
 
   function evRow(ev, showDate) {
     return h('div', { class: 'ev' },
       h('div', { class: 't' },
         h('div', { text: ev.title }),
         h('div', { class: 'when', text: (showDate ? fmtDate(ev.date) + ' · ' : '') + eventTimeLabel(ev) })),
-      h('button', { class: 'icon', title: 'Delete event', 'aria-label': 'Delete event ' + ev.title, onclick: () => deleteEvent(ev.id) }, '×'));
+      ev.readonly
+        ? h('span', { class: 'tag', title: 'Read-only: change it in Outlook', text: ev.source })
+        : h('button', { class: 'icon', title: 'Delete event', 'aria-label': 'Delete event ' + ev.title, onclick: () => deleteEvent(ev.id) }, '×'));
   }
 
   function deleteEvent(id) {
@@ -100,7 +107,7 @@
     const offset = (first.getDay() + 6) % 7; // week starts Monday
     const start = new Date(viewYear, viewMonth, 1 - offset);
     const byDate = new Map();
-    App.data.events.forEach((e) => { (byDate.get(e.date) || byDate.set(e.date, []).get(e.date)).push(e); });
+    allEvents().forEach((e) => { (byDate.get(e.date) || byDate.set(e.date, []).get(e.date)).push(e); });
     const today = todayStr();
     const cells = el('cells');
     cells.replaceChildren();
@@ -114,7 +121,7 @@
         onclick: () => selectDate(ds),
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectDate(ds); } },
       }, h('span', { class: 'num', text: String(d.getDate()) }));
-      evs.slice(0, 3).forEach((ev) => cell.append(h('span', { class: 'chip', text: (ev.allDay ? '' : fmtTime(ev.start) + ' ') + ev.title })));
+      evs.slice(0, 3).forEach((ev) => cell.append(h('span', { class: 'chip' + (ev.readonly ? ' feed' : ''), text: (ev.allDay ? '' : fmtTime(ev.start) + ' ') + ev.title })));
       if (evs.length > 3) cell.append(h('div', { class: 'more', text: '+' + (evs.length - 3) + ' more' }));
       cells.append(cell);
     }
@@ -125,7 +132,7 @@
     const todayEvs = eventsOn(today);
     el('todayList').replaceChildren(...(todayEvs.length ? todayEvs.map((e) => evRow(e, false)) : [h('div', { class: 'empty', text: 'Nothing today.' })]));
 
-    const upcoming = sortEvents(App.data.events.filter((e) => e.date > today && e.date <= addDays(today, 14)));
+    const upcoming = sortEvents(allEvents().filter((e) => e.date > today && e.date <= addDays(today, 14)));
     el('upcoming').replaceChildren(...(upcoming.length ? upcoming.map((e) => evRow(e, true)) : [h('div', { class: 'empty', text: 'Nothing in the next 14 days.' })]));
 
     const head = el('selHead');
@@ -148,7 +155,30 @@
     render();
   }
 
-  function render() { renderGrid(); renderSide(); }
+  function renderSync() {
+    const box = el('sync');
+    box.replaceChildren();
+    const f = App.feeds;
+    if (!f.configured) {
+      box.append(h('div', { text: 'No Outlook calendar linked yet. Add it under "calendarFeeds" in the settings file (cog in the left rail).' }));
+      return;
+    }
+    f.status.forEach((s) => {
+      const when = s.updated ? new Date(s.updated).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' }) : null;
+      const line = s.ok === null ? 'Not synced yet.'
+        : s.ok ? 'Updated ' + when + ' · ' + s.count + ' events (read-only)'
+        : 'Could not refresh: ' + s.error + (when ? '. Showing events from ' + when + '.' : '.');
+      box.append(h('div', {}, h('strong', { text: s.name + ': ' }), line));
+    });
+    const btn = h('button', { style: 'margin-top:8px', text: 'Refresh now', onclick: async () => {
+      btn.disabled = true; btn.textContent = 'Refreshing…';
+      await window.cc.refreshFeeds();
+      btn.disabled = false; btn.textContent = 'Refresh now';
+    } });
+    box.append(btn);
+  }
+
+  function render() { renderGrid(); renderSide(); renderSync(); }
 
   function setup() {
     el('dow').append(...['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('div', { text: d })));
@@ -182,6 +212,7 @@
   }
 
   App.init(() => { if (!ready) { ready = true; setup(); } render(); });
+  window.cc.onNavigate((p) => { if (p && /^\d{4}-\d{2}-\d{2}$/.test(p.date || '')) selectDate(p.date); });
 </script>
 </body>
 </html>
