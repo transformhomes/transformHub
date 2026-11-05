@@ -2,8 +2,12 @@
   "configVersion": 2,
   "startSection": "home",
   "dataDir": null,
-  "agentCommand": "agy",
   "arcaneUrl": "http://127.0.0.1:7600",
+  "explorer": {
+    "drives": [
+      "C:\\"
+    ]
+  },
   "projects": [
     {
       "id": "example",
@@ -28,10 +32,22 @@
     },
     {
       "id": "projects",
-      "label": "AI Projects",
-      "icon": "briefcase",
+      "label": "Explorer",
+      "icon": "folder",
       "type": "local",
       "file": "renderer/projects.html"
+    },
+    {
+      "id": "drmd",
+      "label": "Dr. MD",
+      "icon": "book",
+      "type": "drmd"
+    },
+    {
+      "id": "browser",
+      "label": "Browser",
+      "icon": "globe",
+      "type": "browser"
     },
     {
       "id": "tasks",
@@ -41,11 +57,25 @@
       "file": "renderer/tasks.html"
     },
     {
+      "id": "oracle",
+      "label": "ORACLE",
+      "icon": "chart",
+      "type": "local",
+      "file": "renderer/oracle.html"
+    },
+    {
       "id": "calendar",
       "label": "Calendar",
       "icon": "calendar",
       "type": "local",
       "file": "renderer/calendar.html"
+    },
+    {
+      "id": "calweb",
+      "label": "Calendar (web)",
+      "icon": "calendar",
+      "type": "web",
+      "url": "https://outlook.office.com/calendar/"
     },
     {
       "id": "teams",
@@ -62,12 +92,27 @@
       "url": "https://www.office.com/launch/onedrive"
     },
     {
+      "id": "terminal",
+      "label": "PowerShell",
+      "icon": "terminal",
+      "type": "terminal",
+      "cwd": "D:\\Projects\\IN_PROGRESS_PROJECTS"
+    },
+    {
       "id": "claude",
       "label": "Claude",
       "icon": "star",
       "type": "web",
       "url": "https://claude.ai/new"
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "icon": "gear",
+      "type": "local",
+      "file": "renderer/settings.html"
     }
   ],
-  "userName": ""
+  "userName": "",
+  "calendarFeeds": []
 }

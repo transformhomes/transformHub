@@ -1,21 +1,51 @@
-# TH Command Centre (transformHub)
+# TH Command Centre (Transform Workstation)
 
-One window for your inbox, projects, tasks, calendar, Teams, OneDrive and Claude.
-Windows desktop app built with Electron. Version 0.2.
+One window for your inbox, files, tasks, calendar, Teams, OneDrive and Claude.
+Windows desktop app built with Electron. See package.json for the version.
 
 | Icon | What it is |
 |---|---|
-| Home | Needs attention (overdue and due today), today's events, next 7 days, focus project |
+| Home | Open tasks (yours plus Microsoft To Do, overdue first), today's events and tasks due today, next 7 days, focus project |
 | Inbox | Outlook on the web |
-| AI Projects | Your project list. Open one for its tasks, a button to open Antigravity in its folder, and Arcane |
-| Tasks | Add, tick off, delete (with undo). Saved on this computer |
-| Calendar | Full month view, side panel with today and the next 14 days, add events. Saved on this computer |
+| Explorer | A folder browser with drag and drop and a split view: favourites and your drives, with the folder tree beside the folder view |
+| Dr. MD | A live Markdown editor with a Home screen and your recent files (see below) |
+| Tasks | Add, tick off, delete (with undo). Saved on this computer. Can also show Microsoft To Do (experimental; tick off from Home) |
+| Calendar | Full month view, side panel with today and the next 14 days, add events. Saved on this computer. Can also show your Outlook calendar (read-only, see below) |
 | Teams | Microsoft Teams on the web |
 | Files | OneDrive on the web |
 | Claude | claude.ai on the web |
 
-Outlook, Teams, OneDrive and Claude are the web versions, signed in once and kept signed in.
-Tasks and Calendar are built in and do not read your Outlook calendar or Microsoft To Do.
+Outlook, Teams, OneDrive and Claude are the web versions. Each person signs in once with their own account and stays signed in; sign-ins are stored on that person's own Windows profile, not in this code.
+Tasks and Calendar are built in.
+
+## Quick start (Windows)
+Double-click `transformHub.cmd`. It installs what it needs the first time, then opens the app with no console window. `Start-transformHub.ps1 -Shortcut` adds a desktop shortcut.
+
+## Home dashboard
+
+Home is a dashboard. The header shows the greeting, a large saying in the middle, the **weather** for Thomastown 3074 (today plus four days) and a clock, with a slim Outlook strip and four number tiles under it (overdue, due today, events today, open tasks). Cards are about 75% solid so your background picture shows through a little. Below are **Tasks** (one list: overdue, today, coming up, no date), a **month calendar** (today highlighted, your events and meetings and tasks due written into each day; click a day to see it in full), **Current Projects** (every project, with open tasks, progress and the newest entry from the project's own memory or log file), **Focus and favourites** (your "Make this my focus" project plus starred folders, updated as soon as you star one), **Coming up**, **News**, **Financial news**, **Music news** and **Melbourne gig guide**, each with a small picture where the feed provides one. Your Apps stay on the right.
+
+Project updates are read from each project folder: `08_Memory`, `Memory`, `memory` or `.claude\memory` (any `.md` file) and the files `persistent_memory_log.md`, `MEMORY.md` and `CLAUDE.md`. The newest file is used, and its latest dated entry or heading is shown as written, with the file's last-changed time. Nothing is made up; a project with none of these files shows no update line.
+
+Weather comes from Open-Meteo and the headlines from RSS links, fetched by Workstation itself (nothing to sign up for). Defaults: ABC News (Vic) and The Guardian Australia (news); ABC Business and The Guardian Business (financial); Beat Magazine and The Guardian Music (music); Beat Magazine's "Gig Guide" stories (gigs). Checked from here: the two ABC feeds and Beat Magazine's feed work. The Guardian feeds could not be reached by my checker, so confirm they show. Beat's feed has no pictures, and the gig guide is Beat's gig stories, not a full listing; "Full gig guide" opens Beat's own listing. The ABC Business feed was about a week old when checked. To change anything, edit `config.json`:
+
+```json
+"homeLocation": { "name": "Thomastown 3074", "lat": -37.6833, "lon": 145.0167 },
+"newsFeeds": [ { "name": "ABC News (Vic)", "url": "https://www.abc.net.au/news/feed/5470430/rss.xml" } ],
+"financeFeeds": [ { "name": "ABC Business", "url": "https://www.abc.net.au/news/feed/104217374/rss.xml" } ],
+"musicFeeds": [ { "name": "Beat Magazine", "url": "https://beat.com.au/feed/" } ],
+"gigFeeds": [ { "name": "Beat Gig Guide", "url": "https://beat.com.au/feed/", "category": "gig" } ]
+```
+
+The Thomastown position is approximate. Use an empty list (for example `"newsFeeds": []`) to hide a box. Clicking a headline opens it in your normal browser.
+
+**Claude tab diagnostics:** the Claude tab keeps running while you are on another tab, and a small log of failed requests to claude.ai (times, web addresses without their query part, and error codes) is written to `%APPDATA%\th-command-centre\claude-diagnostics.log` to help trace a hanging chat.
+
+## PowerShell tab
+
+A **PowerShell** tab sits in the rail beside Files (OneDrive). It is a real terminal (colours, Tab completion, arrow-key history, and programs such as git or claude work) and opens in `D:\Projects\IN_PROGRESS_PROJECTS`. It uses PowerShell 7 (`pwsh`) if installed, otherwise the Windows PowerShell that comes with Windows. **Ctrl+C** copies when text is selected (otherwise it interrupts as normal), **Ctrl+V** or right-click pastes. If PowerShell closes, click **Start again**. Change the start folder with `"cwd"` on the tab in `config.json`; remove the tab in Settings, Tabs, and it stays removed.
+
+It needs the `node-pty` package, so run `npm install` in the TransformHub folder once after updating (it ships ready-made Windows files, so no build tools are needed). It has not been tested on Windows yet.
 
 ## Run it (Windows, not inside WSL)
 
@@ -25,20 +55,169 @@ Tasks and Calendar are built in and do not read your Outlook calendar or Microso
        npm install
        npm start
 
-Keys: Ctrl+1 to Ctrl+8 switch section, Ctrl+R reloads the current section.
+Keys. In the built-in pages (Home, Explorer, Tasks, Calendar): Ctrl+1 to Ctrl+9 switch section, Ctrl+R reloads, Ctrl+K opens search and commands.
+In web tabs (Outlook, Teams, OneDrive, Claude, dashboards) those keys belong to the site, so use Alt+1 to Alt+9 to switch section, F5 to reload and Ctrl+Shift+K for search.
+Ctrl+\ shows or hides the side panel everywhere.
 
-## Your projects and name
+## Explorer
+Open Explorer and the folder tree sits on the left of the page, with the folder view beside it. The tree has two groups. **Favourites** holds your configured project folders and any folder you star. **This PC** holds your drives (C:\ by default). Hover over a folder and click the star to add or remove it from Favourites; the same button is on each folder's page. Click a folder to open it in the main area, click a file to preview it (text and images), and use Open or Show in File Explorer for anything else.
+
+Files are only ever moved or copied from here, never deleted or overwritten (see Drag and drop below). Nothing else is changed, programs and scripts are never run from here, and it cannot go outside the folders you set up. System and sign-in folders are never shown on a drive (Windows, Program Files, ProgramData, AppData, the recycle bin, and key stores such as .ssh and .aws).
+
+Your OneDrive folder (for example `D:\OneDrive - Transform Homes`) is found automatically and listed under This PC. It is the folder on your computer that OneDrive syncs, so files you drag in there upload to OneDrive. To hide it, add `"oneDrive": false` inside `"explorer"` in your settings file.
+
+Under the drives you also get quick links to your own Desktop, Downloads, Documents, Pictures, Music and Videos folders (wherever Windows keeps them, including OneDrive). To hide them, add `"explorer": { "quickFolders": false }` to your settings file.
+
+Drives: on Windows, C:\ and D:\ are shown if they exist. To change that, add this to your settings file (a drive letter, or a name and folder):
+
+       "explorer": { "drives": ["C:\\", "D:\\"] }
+
+## Drag and drop, and split view
+- **Move a file or folder:** drag it onto a folder in the list, the folder tree, or the path at the top. It is moved. Hold **Ctrl** to copy instead.
+- **Drop files in from Windows:** drag files from File Explorer or the desktop onto a folder (or onto the open folder's page). They are copied in.
+- **Drag a file out:** hold **Alt** while you drag a file, then drop it on the desktop, a Windows folder, an email or Teams. This copies it; the original stays.
+- **Sort and resize columns:** click **Name**, **Modified** or **Size** at the top of a folder list to sort by it (click again to reverse; folders always stay on top). Drag the thin line at the edge of a column heading to resize it, or double-click that line to reset it. Your choices are remembered.
+- **Split view:** click **Split view** to show a second folder beside the first. Click a pane, then pick a folder in the tree (or click folders in that pane) to change it. You can drag between the two panes. **Close split view** (or the ✕) goes back to one.
+- A name clash never overwrites anything: the new item gets a "(2)" on its name. A folder cannot be dropped into itself, and drives and project folders themselves cannot be moved. Moving to a different drive copies the item, then removes the original.
+
+## Two tabs side by side (inside Workstation)
+**Shift+click** (or **Alt+click**) any tab in the left rail to show it beside the tab you are on: the current tab stays on the left and the Shift+clicked one opens on the right (for example the Explorer on the left and your Excel tab on the right). Click a tab normally to change the left side, or click the tab that is on the right to make it the main one. **Close split** (top right) goes back to one tab. Shift+click the tab you are already on (a website tab such as Buildertrend, or the Explorer) to open a second, separate copy of it on the right, for example two Explorers side by side. Closing the split closes that copy. **Drag the divider** between the two tabs left or right to make one larger (neither can be made narrower than about 240 pixels), or double-click it to go back to half and half. The Browser tab always uses the whole area. To move a file from the Explorer into a web page such as Excel, hold **Alt** and drag the file across.
+
+## Side by side with another program
+**Shift+click** a program tile (a desktop program such as Excel or Word; on Home, or in the Explorer's Apps list) to open it beside Workstation: Workstation takes the left half of the screen and the program the right half, on the screen Workstation is on. Then hold **Alt** and drag a file from the Explorer onto the program (for example a spreadsheet onto Excel) to open or insert it there. **Restore size** (next to Edit in the Apps box on Home) puts Workstation back as it was. If the program takes more than about 20 seconds to open, only Workstation is resized; Shift+click again once it is open. This only moves windows: it does not put the program inside Workstation.
+
+## Open a file in Excel, Word or PowerPoint on the web
+Right-click an Excel, Word or PowerPoint file (.xlsx, .xls, .csv, .docx, .doc, .pptx and similar) in the Explorer and choose **Open in Excel (web)** (or Word, PowerPoint). Workstation copies the file into your OneDrive **My files > Documents** folder, using your signed-in Microsoft session, then opens that copy in your Excel, Word or PowerPoint tab, beside the Explorer. The original on your PC is not changed. A name clash never overwrites anything: the copy gets a "(2)". Files over 25 MB are refused (upload those in the OneDrive tab). You must be signed in to Microsoft (the Inbox or OneDrive tab). It relies on Microsoft's own upload and link formats, so a Microsoft change could stop it working; the desktop **Open in Excel** item is not affected.
+
+## Right-click in the Explorer
+Right-click a file or folder in the Explorer page (or the empty space in a folder) for: Open, Open in File Explorer (or Show in File Explorer for a file), **Open in Excel / Word** and similar (for programs in your Apps list that open that kind of file), **Open in PowerShell here** (in that folder, or the file's folder), **Copy path**, Add to or Remove from favourites (folders), and **Properties** (type, full path, size or item count, created, modified, last opened, read-only). Nothing here deletes, renames or moves files. Like everything in the Explorer, it only works inside your favourites and drives, and the PowerShell window is started with fixed settings so a file name can never be run as a command.
+
+## Apps
+List the programs you want one click away in your settings file. They appear under **Apps** in the Explorer folder tree, on the Explorer page and in Ctrl+K search. `types` is optional: files of those types get an **Open in <program>** button and right-click item in the Explorer. Excel (.xlsx, .xls, .csv and similar), Word (.docx, .doc, .rtf), PowerPoint, Acrobat (.pdf) and Notepad++ already know their file types, so they work without any setup. Macro-enabled files (.xlsm, .docm) are not included by default; add them to `types` yourself if you want them.
+
+       "apps": [
+         { "name": "Typora", "path": "D:\\Program Files\\Typora\\Typora.exe", "types": [".md"] },
+         { "name": "Acrobat", "path": "D:\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe", "types": [".pdf"] },
+         { "name": "Chrome", "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "types": [".html", ".htm"] }
+       ]
+
+The path must be the program's `.exe` file. Only programs in this list can be started, and the Explorer itself still never runs programs or scripts.
+
+The same list fills the **Apps** panel on the right of the Home page, with each program's own icon. Click a tile to open that program in its own window, outside Transform Workstation. **Add app** lets you pick a program's `.exe` file from this computer; **Edit** shows a cross on each tile to remove it. Adding or removing rewrites the `apps` list in your settings file (up to 24 apps), keeping a copy of the old file the first time as `config.before-apps.bak.json`. Removing only takes the app off the list; it never uninstalls anything.
+
+**Groups:** the Apps panel on Home is split into groups (Office, AI and creative, Utilities, and Other). Well-known programs are placed by name; anything else goes under Other. Click a group's name to hide or show it. Click **Edit**, then drag a tile onto a group's name to move it, or onto "Drop a tile here to start a new group". The choice is saved as `"group"` on that app in your settings file (a copy of the old file is kept the first time as `config.before-groups.bak.json`). Tiles show a friendly name such as Word, Excel or Copilot.
+
+**File Explorer:** add Windows' own File Explorer as an app with `{ "name": "File Explorer", "path": "C:\\Windows\\explorer.exe" }` (or choose `C:\Windows\explorer.exe` with Add app). It opens a normal Explorer window.
+
+**Icons:** tiles use each program's own icon. If Windows gives a plain blank-window icon for a program that has a real one, Transform Workstation tries to read the icon from the file itself. To force a picture, add `"icon": "C:\\path\\to\\picture.png"` (a .png, .ico or .jpg under 1 MB) to that app. A left-rail item can use a program's icon too, with `"iconFile": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"` on its entry in `sections` (a program, or a .png, .ico or .jpg picture).
+
+## Dr. MD (Markdown editor)
+Dr. MD is a separate project (a single-pane editor that formats Markdown as you type). Inside Transform Workstation it opens as its own tab, with a **Home** button that lists your recently opened files. Choose a file there, or use New, Open or Save as. It opens and saves `.md` and `.markdown` files only.
+
+How it stays safe: the Dr. MD page never sends a file path. It asks Transform Workstation to show the normal Open and Save dialogs, and can then only read or write the files you chose (and ones in the recent list). Saving never overwrites a file that changed on disk since you opened it; you are asked what to do. Before the first overwrite of a file, the old copy is kept in `%APPDATA%\th-command-centre\drmd-backups` (the newest 30 are kept). The history stores file names and folders, never content, in `drmd-recents.json` next to your settings, for that person only. Drafts of notes that have not been saved to a file are kept in Dr. MD's own storage on that computer.
+
+Setting it up (once, and again whenever Dr. MD changes):
+
+       # in the Dr. MD project folder
+       bun run build:hub
+
+       # in this folder
+       npm run drmd -- "D:\Projects\IN_PROGRESS_PROJECTS\DrMD"
+
+That copies the built page into the `drmd` folder here (it is not stored in git), so restart the app afterwards. The section is in `config.default.json`; if your settings file was made earlier, add it yourself:
+
+       { "id": "drmd", "label": "Dr. MD", "icon": "book", "type": "drmd" }
+
+Dr. MD runs from files on this computer and loads nothing from the internet. In its tab, Alt+1 to Alt+9 switch section, like the other tabs that have their own shortcuts.
+
+## Browser tab
+A small web browser inside the hub: tabs, an address bar (type a web address or a search), back, forward, reload and stop. Links that want a new window open as a new tab. Shortcuts while it has the focus: Ctrl+T new tab, Ctrl+W close tab, Ctrl+L address bar, Ctrl+Tab next tab, Alt+Left and Alt+Right back and forward, F5 or Ctrl+R reload. Alt+1 to Alt+9 switch section, like the other web tabs.
+
+How it stays separate and safe: it keeps its own sign-ins, cookies and history (the `persist:th-browser` area), apart from Outlook, Teams, Claude and the rest. Pages in it get no connection to the hub, cannot open `file:` addresses, and are refused the camera, microphone, location and notifications (only full screen and copying to the clipboard are allowed). The address bar only opens `http` and `https`; anything else is treated as a search. Searches use Google. Visited addresses (the last 300) are kept in `browser-history.json` next to your settings, for address-bar suggestions. The `...` button clears history, sign-ins and cached files after you confirm. Up to 20 tabs.
+
+The section is in `config.default.json`. If your settings file was made earlier, add it yourself (an optional `"url"` sets the first page, which must be https):
+
+       { "id": "browser", "label": "Browser", "icon": "globe", "type": "browser" }
+
+Not built: Chrome extensions, bookmarks, a history page, find in page, saved passwords, and tabs that remember where they were after a restart. Sign-in pop-ups that depend on a separate window may not complete; use the page's normal sign-in instead.
+
+## Outlook on the Home page
+Home shows how many unread emails you have, how many appointments are today and the next one, and a month calendar with dots on days that have events (click a day to see its events). The numbers come from **classic Outlook** running on this computer (Windows only). Transform Workstation only talks to an Outlook that is already open, never starts one, and reads just the unread count in the Inbox and each appointment's title and times (private appointments show as "Private appointment"). It writes and sends nothing. If Outlook is closed, Home says so. It refreshes about every two minutes and when you return to the window.
+
+The new Outlook (the web-based one) cannot be read this way. To turn the feature off, add `"outlookDesktop": false` to your settings file.
+
+## Email attachments: drag them to another tab or program
+In the Inbox tab, open an attachment's menu and choose **Download**. Workstation saves it straight away (no Save window) into `Downloads\Workstation attachments`, and a chip with its name appears in the header bar (up to three show; the rest are counted). With a second tab open beside it (**Shift+click** a tab in the rail) or a program placed beside Workstation, drag the chip onto that tab or program to hand it the real file, for example onto an Excel, OneDrive or Claude tab. A name clash never overwrites an older file: the new one gets a "(2)". The **✕** clears the chips; the files stay in your Downloads folder. Only downloads from the Inbox tab are saved this way; other tabs still show the normal Save window. Dragging an attachment straight out of the email page is not possible, because Outlook only offers a link to it that other tabs cannot accept as a file.
+
+## Calendar (web) tab
+A **Calendar (web)** tab sits beside the built-in Calendar. It is Outlook Calendar on the web, so you can open meetings, move them, edit them and add new ones, using the same Microsoft sign-in as the Inbox tab. The old built-in Calendar tab is hidden the first time the app starts after this update (bring it back in Settings, Tabs, by un-hiding Calendar). Links to it from Home and search open the Calendar (web) tab instead; Home still shows your events. The web tab is added once, the first time the app starts after this update (a copy of your old settings file is kept as `config.before-calweb.bak.json`). If you remove it in Settings it stays removed. The built-in Calendar and the Home page still show your events as before.
+
+## Sleeping tabs (saves memory)
+A website tab you have not looked at for 30 minutes is closed to free memory, and loads again, fresh, when you click it. Anything unsaved in that page is lost, so save first (Word and Excel on the web save as you go). Tabs named like Inbox, Outlook, Mail or Teams never sleep, so their messages keep arriving, and neither does a tab that is playing sound or in a call. The built-in pages, the Browser tab and the password vault are not affected. To change it, add this to your settings file (the `never` list replaces the default, so include every tab you want kept awake; use a tab's id or name):
+
+       "sleepTabs": { "minutes": 45, "never": ["mail", "teams", "claude"] }
+
+or `"sleepTabs": false` to turn it off. The minutes can be 5 to 480.
+
+The hidden window that reads Microsoft To Do is also closed 30 seconds after each refresh or tick, and opened again when next needed, so it no longer sits in memory between the 10-minute refreshes. Closing the second copy of a tab (Close split) frees that copy straight away.
+
+## Spell check
+Spell check is on in every tab and page (Home, Tasks, Dr. MD, Outlook, Teams, Claude, the Browser and the rest), in **Australian English**. Misspelled words get a red underline; right-click one for suggestions or **Add to dictionary** (words you add are remembered). Right-click in any text box also gives Cut, Copy and Paste. If the Australian dictionary is not available on your computer it falls back to British, then US English. To choose others, add for example `"spellCheckLanguages": ["en-AU", "en-GB"]` to your settings file. The first time a language is used, Windows or Electron may need a moment (and an internet connection) to fetch its dictionary. Some web apps (Outlook, Teams) draw their own right-click menus, and those menus may not show spelling suggestions even though the underline is there.
+
+## Settings page and re-arranging
+The **Settings** button (cog, bottom of the left rail) opens a Settings page with plain forms, so nobody needs to edit a text file: your name (for the Home greeting), the spell check language, the tab to open at start-up, Outlook on Home on or off, the **Tabs** (rename, change the icon, change the order with the arrows, show or hide built-in tabs, add or remove website tabs), **Calendar links** (up to 5), and **Project folders** (with a Browse button). Press **Save changes**. Changes to tabs need a restart, and the page has a **Restart now** button. Every save is checked first (web addresses must start with https://, folders need a full path, and so on) and a copy of the old settings file is kept in a `config-backups` folder next to it (the last ten). The **Advanced** section at the bottom lets you edit the whole settings file as text, for things not on the page such as drives, apps and Microsoft To Do. It checks the text and tells you the line of any mistake, and refuses a file that would reset your settings.
+
+**Re-arrange by dragging.** Drag a tab in the left rail up or down to change its order, and drag a tile in the Home **Apps** panel to change the order of your apps. The new order is saved straight away (a copy of the old file is kept the first time as `config.before-reorder.bak.json`). Without a mouse, focus an item and press Alt+Shift+Up/Down (rail) or Alt+Shift+Left/Right (apps). The order of the tabs also decides the Ctrl+1 to Ctrl+9 shortcuts.
+
+## Pick up where you left off (Home)
+
+The bottom of the Home page lists the files and folders you opened lately, newest first, in the style of the Recent list in Microsoft apps. It reads the same Recent list Windows keeps for File Explorer, Word, Excel and PDF viewers, so it only shows names, places and times. Click a row to open it, or "Show in folder" to see where it lives. Filter by Documents, Spreadsheets, PDFs or Folders. Programs and scripts are never listed or run. Turn it off under Settings, Home page.
+
+## Shortcuts for moving around
+
+Alt+Q jumps back to the tab you were on before this one, and pressing it again returns you. It works from every tab, including the website tabs. If a website uses Alt+Q itself, use "Go back to the previous tab" in the Ctrl+K search box instead.
+
+## Search box (Ctrl+K)
+
+The search box also finds files and folders on this PC by name, using the Windows search index (the same one File Explorer uses). It only finds places Windows already indexes, such as Documents and Desktop; add other folders in Windows Settings under Search, then Searching Windows. Press Enter to open a result, or Shift+Enter to show it in its folder. Programs and scripts are never run from here: they are shown in their folder instead.
+
+## Home page background
+
+In Settings, choose a picture (PNG, JPG or WebP, up to 8 MB) to sit behind the Home page, and use the slider to dim it so the writing stays easy to read. A copy is kept inside the app, so the original can be moved or deleted.
+
+## Security and safety
+
+- **Screen lock.** In Settings, choose a PIN. Transform Workstation then covers itself with a PIN screen after the quiet time you pick, when Windows locks or the PC sleeps, and when it starts. Press Ctrl+Shift+L to lock at once. The PIN is stored only as a salted hash in `lock.json` beside your settings. Wrong guesses make the screen wait. If you forget the PIN, close the app, delete `lock.json` and start it again. This keeps people away from your open sign-ins; it does not replace Windows sign-in or BitLocker.
+- **Websites stay in their lane.** A website tab only moves within its own site and the Microsoft, Claude and DOMO sign-in sites. Any other link opens in the Browser tab. If a sign-in needs another site, add it to the optional `"allowedHosts": ["example.com"]` list in the settings file. The Bitwarden tab is locked to bitwarden.com and keeps its own storage, apart from every other tab.
+- **Untrusted certificates.** The Browser tab will not open a site whose security certificate is wrong, expired or untrusted. It shows a warning page, with no "continue anyway".
+- **Stay signed in.** Sign-ins for DOMO last 30 days between restarts. Add other sites with `"keepSignedIn": ["domo.com", "example.com"]` in the settings file (this list replaces the default, so keep domo.com in it).
+- **Developer tools** stay shut. For development only, start with the environment variable `TH_DEVTOOLS=1`.
+- **Hardening.** `npm run harden` switches off Electron features the hub never uses (running as plain Node.js, the NODE_OPTIONS variable, debugging switches) and turns on encrypted cookies. It runs automatically after `npm install`, and again when you build the installer. Signing in again once is normal after the first run, because older cookies were not encrypted.
+- **Settings backups.** The Settings page lists the last ten copies of your settings file, with a Restore button.
+
+## Light and dark, and the logo
+The sun/moon button in the header switches between light and dark; your choice is remembered. Until you choose, the app follows Windows. If `thumbnail.png` (or `transformHub.png`) sits in the app folder, it shows at the top of the left rail. The window and taskbar icon is `thumbnail.ico` if present (or `transformHub.ico`, then the PNG); `Make-Icon.ps1` builds the .ico from the PNG. The logo and icon files are not stored in this repository.
+
+## Microsoft To Do in Tasks (experimental, read-only)
+Add `"msTodo": { "enabled": true }` to your settings file (next to `userName`) and restart. The app then reads your To Do tasks from the To Do web page, using the same Microsoft sign-in as the Inbox tab, every 10 minutes. They show in the Tasks page, the side panel and the Home page. On the Home page, click the circle beside a To Do task to tick it off: the app opens To Do in the background, ticks that task and checks Microsoft accepted it (this takes a few seconds; the row shows "Ticking…"). Ticking only works for open tasks it can find by title on the Tasks list, and recurring tasks will create their next occurrence as normal. Each task's due date is read too (Overdue, Today, Tomorrow or a date), so To Do tasks due today also appear in Home's Today card and overdue ones are marked Overdue. Due dates fill in on the next refresh (every 10 minutes, or press Refresh on the Tasks page). It reads the page layout, so a Microsoft change can break it: the Tasks page then says so and offers a diagnostic that contains no task text. Sign in to Microsoft in the Inbox tab first.
+
+## Icons
+Rail icons are colour-coded by type. Web tabs show the site's own icon once you have opened the tab once.
+
+## Adding a web tab (for example a dashboard)
+Add a section to your settings file: `{ "id": "domo", "label": "DOMO", "icon": "chart", "type": "web", "url": "https://your-dashboard-link" }`. Keep company dashboard links in your settings file only, never in the files you commit. Sign-in happens inside the app; whether your company's single sign-on works there is untested.
+
+## Your folders and name
 
 The app creates its settings file on first run at `%APPDATA%\th-command-centre\config.json`.
 The committed default only has an example project. To use your own list, edit that file
-(cog icon in the left rail opens it), or copy `config.dale.json` over it before first run.
-`config.dale.json` holds your real project names and folders, and is ignored by git so it
-never goes to GitHub.
+(the cog in the left rail opens it). A copy of your settings kept in this folder as
+`config.personal.json` (or any `config.*.json` except the default) is ignored by git, so real folder names and links never go to GitHub.
 
-Settings you can change: `userName`, `projects` (id, name, folder), `agentCommand`
-(default `agy`, the Antigravity command), `arcaneUrl`, `dataDir`, and the `sections` list.
+Settings you can change: `userName`, `calendarFeeds`, `projects` (id, name, folder), `explorer` (drives), `apps`, `arcaneUrl`, `dataDir`, `msTodo` and the `sections` list.
 Restart the app after editing. Upgrading from 0.1: your old settings are kept as
-`config.v1.bak.json` and replaced with the new layout.
+`config.v1.bak.json` and replaced with the new layout. The old "AI Projects" tab is renamed Explorer automatically; a name you chose yourself is kept.
+Favourites you star are remembered per person in `ui-state.json` next to the settings file.
 
 ## Where your data lives
 
@@ -48,11 +227,22 @@ so a crash cannot leave a half-written file, and a damaged file is set aside as
 `data.json.corrupt-<time>` instead of being overwritten. To keep it somewhere else (for
 example a OneDrive folder for backup), set `dataDir` in the settings file.
 
-## Antigravity button
+## Show your Outlook calendar (read-only)
 
-"Open in Antigravity" runs `agy "<project folder>"`. It needs Antigravity installed with the
-`agy` command on your PATH. If it is not found, the page says so. The command name comes from
-the settings file, and the folder must be one listed in your projects.
+In Outlook on the web: Settings, Calendar, Shared calendars, Publish a calendar. Choose the
+calendar and permission, click Publish, and copy the **ICS** link. Then add it to your
+settings file (`%APPDATA%\th-command-centre\config.json`, the cog opens it):
+
+       "calendarFeeds": [ { "name": "Outlook", "url": "PASTE_THE_ICS_LINK_HERE" } ],
+
+Restart the app. Outlook events then show in the Calendar tab (teal, with the feed name) and on
+Home. They are read-only: change them in Outlook. The app refreshes every 15 minutes and from the
+"Refresh now" button, and keeps showing the last good copy if a refresh fails.
+
+The link is a secret: anyone with it can read that calendar. Keep it only in your settings file.
+It is never sent to the pages, written to the cache or logged. Only the title, date and time of
+each event are kept (no attendees, notes or locations). `config.json` and `config.personal.json` are
+ignored by git. To cancel the link, unpublish the calendar in Outlook on the web.
 
 ## Make an installer (optional)
 
@@ -68,16 +258,6 @@ the settings file, and the folder must be one listed in your projects.
 - Tested on Linux in a virtual display, not yet on Windows. Sign-in to Microsoft and Claude has
   not been tested.
 
-## Putting it on GitHub
+## Licence
 
-The repository transformhomes/transformHub is currently public. Consider making it private
-(Settings, then Danger Zone, then Change visibility) until the app is stable, and decide on a
-licence before sharing it. No licence file is included.
-
-       git init
-       git add .
-       git status          (check config.dale.json is NOT listed)
-       git commit -m "Initial commit: TH Command Centre 0.2"
-       git branch -M main
-       git remote add origin https://github.com/transformhomes/transformHub.git
-       git push -u origin main
+No licence file is included; the code is for Transform Homes internal use.

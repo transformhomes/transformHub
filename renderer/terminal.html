@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'">
+<title>PowerShell</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  html, body { margin:0; height:100%; background:#14171c; overflow:hidden; }
+  #wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; box-sizing:border-box; }
+  #t { width:100%; height:100%; }
+  #msg { position:absolute; left:14px; right:14px; bottom:12px; padding:8px 12px; border-radius:8px; background:#2b3140; color:#e6e9ef; font:13px 'Segoe UI',sans-serif; display:none; }
+  #msg button { margin-left:10px; font:inherit; padding:3px 10px; border-radius:6px; border:1px solid #556; background:#3a4256; color:inherit; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="t"></div></div>
+<div id="msg"><span id="msgt"></span><button id="again" hidden>Start again</button></div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="terminal.js"></script>
+</body>
+</html>

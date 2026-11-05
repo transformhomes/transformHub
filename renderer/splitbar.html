@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Divider</title>
+<style>
+  html, body { margin:0; height:100%; background:transparent; overflow:hidden; user-select:none; cursor:col-resize; }
+  #bar { position:absolute; inset:0; display:grid; place-items:center; border-radius:4px; touch-action:none; }
+  #bar::after { content:''; width:4px; height:44px; border-radius:2px; background:rgba(128,138,155,.55); }
+  html.big #bar { background:transparent !important; } html.big #bar::after { display:none; }
+  #bar:hover, #bar.drag { background:rgba(80,140,230,.22); }
+  #bar:hover::after, #bar.drag::after { background:rgba(80,140,230,.95); }
+</style>
+</head>
+<body>
+<div id="bar" role="separator" aria-orientation="vertical" aria-label="Drag to change how wide each tab is" title="Drag to resize. Double-click for half and half."></div>
+<script>
+  const handle = document.getElementById('bar');
+  let held = false;
+  // While held, the main process stretches this view over the whole window, so every mouse move arrives here, even over the tabs.
+  const move = (ev) => { if (held && document.documentElement.clientWidth > 200) window.bar.resize(ev.clientX); };
+  const release = () => {
+    if (!held) return;
+    held = false;
+    document.documentElement.classList.remove('big');
+    handle.classList.remove('drag');
+    window.bar.grab(false);
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    held = true;
+    handle.classList.add('drag');
+    document.documentElement.classList.add('big');
+    window.bar.grab(true);
+  });
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', release);
+  document.addEventListener('pointercancel', release);
+  handle.addEventListener('dblclick', () => window.bar.reset());
+</script>
+</body>
+</html>
