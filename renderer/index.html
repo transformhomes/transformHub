@@ -61,6 +61,10 @@
   #shelf .chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #shelf .chip:hover { border-color:var(--accent); }
   #shelf .x { padding:2px 7px; font-size:12px; }
+  #clock { flex:none; display:flex; flex-direction:column; align-items:flex-end; line-height:1.15; padding:0 6px; color:var(--fg); white-space:nowrap; cursor:default; }
+  #clock b { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
+  #clock span { font-size:11px; color:var(--muted); }
+  @media (max-width:760px) { #clock span { display:none; } }
   #crumb b { color:var(--fg); font-weight:600; }
   .hb { border:0; background:transparent; color:var(--muted); width:34px; height:34px; border-radius:8px; display:grid; place-items:center; cursor:pointer; }
   .hb:hover { background:var(--hover); color:var(--fg); }
@@ -90,6 +94,7 @@
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
   </button>
   <div id="crumb"></div>
+  <div id="clock" aria-label="Current time and date"><b id="clockTime"></b><span id="clockDate"></span></div>
   <div id="shelf" hidden aria-label="Downloaded attachments"></div>
   <button class="hb" id="splitClose" hidden aria-label="Close the second tab" title="Close the second tab (back to one tab)" style="width:auto;padding:0 10px;font-size:12.5px">Close split ✕</button>
   <button id="search" aria-label="Search and commands (Ctrl+K)"><svg viewBox="0 0 24 24" style="width:16px;height:16px"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span>Search…</span><kbd>Ctrl K</kbd></button>
@@ -324,6 +329,19 @@
     renderFeed();
     setInterval(renderFeed, 5 * 60 * 1000);
   })();
+    // Clock and date in the header (Melbourne time follows the computer's own clock)
+    (function () {
+      const t = $('clockTime'), d = $('clockDate'), box = $('clock');
+      const tf = new Intl.DateTimeFormat('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true });
+      const df = new Intl.DateTimeFormat('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      function tick() {
+        const n = new Date();
+        t.textContent = tf.format(n).replace(/\s?([ap])m/i, (m, x) => ' ' + x.toLowerCase() + 'm');
+        d.textContent = df.format(n);
+        box.title = n.toLocaleString('en-AU');
+      }
+      tick(); setInterval(tick, 1000 * 15);
+    })();
 </script>
 </body>
 </html>
