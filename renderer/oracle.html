@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>ORACLE</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .counts { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0 22px; }
+  .count-card { min-width:130px; }
+  .count-card .n { font-size:22px; font-weight:700; }
+  .count-card .lbl { font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .count-row { display:flex; gap:14px; margin-top:6px; }
+  .count-row span { font-size:12.5px; color:var(--muted); }
+  .count-row b { color:var(--fg); }
+  .q-card { margin-bottom:12px; }
+  .q-card .hd { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+  .q-card .agent { font-weight:700; }
+  .q-card .question { margin:6px 0; }
+  .q-card ul.ev { margin:6px 0 10px; padding-left:18px; color:var(--muted); font-size:12.5px; }
+  .q-card .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .q-card input[type=text] { flex:1; min-width:160px; }
+  button.approve { border-color:var(--ok); color:var(--ok); }
+  button.approve:hover { background:var(--ok-bg); }
+  button.reject { border-color:var(--danger); color:var(--danger); }
+  button.reject:hover { background:var(--err-bg); }
+  #log { background:var(--well); border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+    font-family:Consolas, monospace; font-size:12px; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:10px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .dot.live { background:var(--ok); } .dot.stale { background:var(--warn); } .dot.none { background:var(--muted); }
+  #progressWrap { margin-top:10px; }
+  #progressLabel { font-size:12px; color:var(--muted); margin-bottom:4px; }
+  #progressBar { height:7px; border-radius:4px; background:var(--well); overflow:hidden; }
+  #progressFill { height:100%; width:0%; background:var(--ok); border-radius:4px; transition:width .4s ease; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>ORACLE</h1>
+  <p class="sub">Status from the last live run. Nothing here touches Buildertrend or the decisions file directly --
+    Approve/Reject is queued and applied by ORACLE's own next live run.</p>
+
+  <div class="card row" style="justify-content:space-between;margin-bottom:22px">
+    <div class="row">
+      <span id="statusDot" class="dot none" aria-hidden="true"></span>
+      <span id="statusLine">Checking…</span>
+    </div>
+    <div class="row">
+      <button id="refresh" class="ghost">Refresh</button>
+      <button id="runNow" class="primary">Run now (live)</button>
+    </div>
+  </div>
+
+  <div id="progressWrap" hidden>
+    <div id="progressLabel"></div>
+    <div id="progressBar"><div id="progressFill"></div></div>
+  </div>
+
+  <div id="logWrap" hidden>
+    <h2>Run output</h2>
+    <div id="log"></div>
+  </div>
+
+  <h2>By agent</h2>
+  <div id="counts" class="counts"></div>
+
+  <h2>Open questions <span id="qCount" class="muted"></span></h2>
+  <div id="questions"></div>
+
+  <div id="problems"></div>
+</div>
+
+<script src="common.js"></script>
+<script>
+  let status = null;
+  let running = false;
+  let runProgress = null; // {stage, index, total, percent} for the run THIS tab started; null = unknown
+  const queued = new Set(); // keys answered this session, so their buttons grey out immediately
+  // A run has no finer unit of progress than "which of these stages is running" (Dale,
+  // 05/11/2026) -- see th_agents/log.py PROGRESS_STAGES and oracle.js parseProgress().
+  const STAGE_LABELS = { A1: 'A1 Scheduler', A2: 'A2 Accountant', A3: 'A3 Site Super', A4: 'A4 PM', Reports: 'Making reports' };
+
+  function renderProgress() {
+    const wrap = document.getElementById('progressWrap');
+    if (!running || !runProgress) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    document.getElementById('progressLabel').textContent =
+      (STAGE_LABELS[runProgress.stage] || runProgress.stage) + ' — ' + runProgress.percent + '%';
+    document.getElementById('progressFill').style.width = runProgress.percent + '%';
+  }
+
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }); }
+    catch { return iso; }
+  }
+
+  function renderStatusLine() {
+    const dot = document.getElementById('statusDot');
+    const line = document.getElementById('statusLine');
+    if (running) { dot.className = 'dot live'; line.textContent = 'Run in progress…'; return; }
+    if (!status || !status.ok) {
+      dot.className = 'dot none';
+      line.textContent = status && status.reason === 'none' ? 'No live run yet.' : 'Could not read the last run status.';
+      return;
+    }
+    const d = status.data;
+    const ageMs = d.generated_at ? Date.now() - new Date(d.generated_at).getTime() : null;
+    const stale = ageMs != null && ageMs > 36 * 3600 * 1000; // older than a day and a half: flag it
+    dot.className = 'dot ' + (stale ? 'stale' : 'live');
+    line.textContent = 'Last live run ' + fmtWhen(d.generated_at) + (d.exit_code ? ' — exit code ' + d.exit_code : '')
+      + (stale ? ' (no more recent run found)' : '');
+  }
+
+  function renderCounts() {
+    const box = document.getElementById('counts');
+    box.replaceChildren();
+    const byAgent = (status && status.ok && status.data.by_agent) || {};
+    const names = { A1: 'Scheduler', A2: 'Accountant', A3: 'Site Super', A4: 'PM' };
+    ['A1', 'A2', 'A3', 'A4'].forEach((a) => {
+      const c = byAgent[a] || { done: 0, proposed: 0, waiting: 0, failed: 0 };
+      box.append(h('div', { class: 'card count-card' },
+        h('div', { class: 'lbl', text: a + ' ' + names[a] }),
+        h('div', { class: 'n', text: String(c.done) }),
+        h('div', { class: 'lbl', text: 'done' }),
+        h('div', { class: 'count-row' },
+          h('span', {}, h('b', { text: String(c.proposed) }), ' proposed'),
+          h('span', {}, h('b', { text: String(c.waiting) }), ' waiting'),
+          h('span', {}, h('b', { text: String(c.failed) }), ' failed'))));
+    });
+  }
+
+  async function decide(key, decision, inputEl) {
+    const comment = inputEl ? inputEl.value.trim() : '';
+    const r = await window.cc.decideOracle({ key, decision, comment });
+    if (!r || !r.ok) { toast('Could not queue that answer' + (r && r.error ? ': ' + r.error : '')); return; }
+    queued.add(key);
+    toast(decision[0].toUpperCase() + decision.slice(1) + 'd — applied on the next live run');
+    renderQuestions();
+  }
+
+  function renderQuestions() {
+    const box = document.getElementById('questions');
+    const countEl = document.getElementById('qCount');
+    box.replaceChildren();
+    const qs = (status && status.ok && status.data.open_questions) || [];
+    countEl.textContent = qs.length ? '(' + qs.length + ')' : '';
+    if (!qs.length) { box.append(h('div', { class: 'empty', text: 'Nothing needs your approval right now.' })); return; }
+    qs.forEach((q) => {
+      const done = queued.has(q.key);
+      const note = h('input', { type: 'text', placeholder: 'Optional note', maxlength: '500' });
+      box.append(h('div', { class: 'card q-card' },
+        h('div', { class: 'hd' },
+          h('span', { class: 'agent', text: q.agent }),
+          h('span', { class: 'tag', text: q.project }),
+          h('span', { class: 'tag', text: q.action }),
+          q.still_waiting && h('span', { class: 'tag', text: 'Still waiting' })),
+        h('div', { class: 'question', text: q.question }),
+        q.evidence && q.evidence.length ? h('ul', { class: 'ev' },
+          q.evidence.map((e) => h('li', { text: e.source + (e.detail ? ': ' + e.detail : '') }))) : null,
+        done ? h('div', { class: 'msg ok', text: 'Queued — applied on the next live run.' }) :
+          h('div', { class: 'actions' },
+            h('button', { class: 'approve', onclick: () => decide(q.key, 'approve', note) }, 'Approve'),
+            h('button', { class: 'reject', onclick: () => decide(q.key, 'reject', note) }, 'Reject'),
+            h('button', { class: 'ghost', onclick: () => decide(q.key, 'hold', note) }, 'Hold'),
+            note)));
+    });
+  }
+
+  function renderProblems() {
+    const box = document.getElementById('problems');
+    box.replaceChildren();
+    const problems = (status && status.ok && status.data.problems) || [];
+    if (!problems.length) return;
+    box.append(h('h2', { text: 'Problems (' + problems.length + ')' }));
+    problems.forEach((p) => box.append(h('div', { class: 'msg err', text: p })));
+  }
+
+  function render() {
+    renderStatusLine();
+    renderProgress();
+    renderCounts();
+    renderQuestions();
+    renderProblems();
+    document.getElementById('runNow').disabled = running || (status && status.running);
+  }
+
+  // Never let a failed call here leave the page stuck on "Checking..." forever with no
+  // clue why (Dale, 05/11/2026 bug report): any error is shown on the page itself, since
+  // DevTools isn't something he'd normally have open.
+  function showLoadError(err) {
+    const line = document.getElementById('statusLine');
+    document.getElementById('statusDot').className = 'dot none';
+    line.textContent = 'Could not load ORACLE status: ' + (err && err.message ? err.message : String(err));
+  }
+
+  async function load() {
+    try {
+      status = await window.cc.getOracleStatus();
+      running = !!(status && status.running);
+      render();
+    } catch (err) {
+      showLoadError(err);
+    }
+  }
+
+  document.getElementById('refresh').addEventListener('click', load);
+  document.getElementById('runNow').addEventListener('click', async () => {
+    const btn = document.getElementById('runNow');
+    btn.disabled = true;
+    document.getElementById('logWrap').hidden = false;
+    document.getElementById('log').textContent = '';
+    runProgress = null;
+    try {
+      const r = await window.cc.runOracleNow();
+      if (!r || !r.ok) { toast('Could not start the run' + (r && r.error ? ': ' + r.error : '')); btn.disabled = false; return; }
+      running = true;
+      renderStatusLine();
+      renderProgress();
+    } catch (err) {
+      toast('Could not start the run: ' + (err && err.message ? err.message : String(err)));
+      btn.disabled = false;
+    }
+  });
+
+  try {
+    if (window.cc && window.cc.onOracleLog) window.cc.onOracleLog((line) => {
+      const log = document.getElementById('log');
+      log.textContent += line + '\n';
+      log.scrollTop = log.scrollHeight;
+    });
+    if (window.cc && window.cc.onOracleProgress) window.cc.onOracleProgress((p) => {
+      runProgress = p;
+      renderProgress();
+    });
+    if (window.cc && window.cc.onOracleRunDone) window.cc.onOracleRunDone((r) => {
+      running = false;
+      runProgress = null;
+      toast(r && r.code === 0 ? 'Run finished' : 'Run finished with an error' + (r && r.error ? ': ' + r.error : ' (exit code ' + (r && r.code) + ')'));
+      load();
+    });
+  } catch (err) {
+    showLoadError(err);
+  }
+
+  if (!window.cc || typeof window.cc.getOracleStatus !== 'function') {
+    const have = window.cc ? Object.keys(window.cc).sort().join(', ') : '(window.cc itself is missing)';
+    showLoadError(new Error('window.cc.getOracleStatus is not available. window.cc currently has: ' + have));
+  } else {
+    load();
+    setInterval(load, 20000);
+  }
+</script>
+</body>
+</html>
