@@ -1759,6 +1759,14 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof p.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.date)) params.date = p.date;
       if (typeof p.project === 'string' && p.project.length <= 100) params.project = p.project;
       if (typeof p.path === 'string' && safeRel(p.path) !== null) params.path = safeRel(p.path);
+      // A page that asks to go somewhere in its own section (the Explorer on either side of a split, or a second copy of it)
+      // changes only itself. Without this, the right-hand Explorer's folder clicks moved the main one instead.
+      let ownKey = null;
+      for (const [k, v] of views) { if (!v.webContents.isDestroyed() && v.webContents === e.sender) { ownKey = k; break; } }
+      if (ownKey && ownKey.split('#')[0] === p.section && (ownKey === secondId || ownKey === currentId)) {
+        deliverParams(views.get(ownKey), Object.keys(params).length ? params : {});
+        return;
+      }
       select(p.section, Object.keys(params).length ? params : undefined);
       if (win && !win.isDestroyed()) win.webContents.send('cc:nav', { section: p.section, ...params });
     });
@@ -2084,6 +2092,16 @@ if (!app.requestSingleInstanceLock()) {
         onProgress: (p) => { if (!sender.isDestroyed()) sender.send('oracle:progress', p); },
         onDone: (code, error) => { if (!sender.isDestroyed()) sender.send('oracle:run-done', { code, error }); },
       });
+    });
+    // Inbox/Approved/Held/Rejected history (Dale, 06/11/2026) -- read-only, same file
+    // ORACLE's own live run writes (decisions_history.json). Nothing here writes a
+    // decision; Approve/Reject/Hold from any tab still only ever goes through
+    // oracle:decide -> app_answers.json -> ORACLE's own next live run, same as the Inbox.
+    ipcMain.handle('oracle:history', (e) => {
+      if (!isLocalSender(e)) return null;
+      const root = oracleRoot();
+      if (!root) return { ok: false, reason: 'unreadable' };
+      return require('./oracle').readHistory(root);
     });
 
     ipcMain.handle('data:get', (e) => (isLocalSender(e) ? store.get() : null));
