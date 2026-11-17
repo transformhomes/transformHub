@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('term', {
   input: (data) => ipcRenderer.send('term:input', data),
   resize: (cols, rows) => ipcRenderer.send('term:resize', cols, rows),
   onData: (fn) => ipcRenderer.on('term:data', (_e, d) => fn(d)),
+  onRestart: (fn) => ipcRenderer.on('term:restart', () => fn()),
   onExit: (fn) => ipcRenderer.on('term:exit', (_e, c) => fn(c)),
   clipRead: () => ipcRenderer.invoke('term:clip-read'),
   clipWrite: (t) => ipcRenderer.send('term:clip-write', t),

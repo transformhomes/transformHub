@@ -47,7 +47,8 @@ function createTerminal({ ipcMain, clipboard, isTerminalSender, getStartDir, loa
     proc.onData((d) => { if (!wc.isDestroyed()) wc.send('term:data', d); });
     proc.onExit(({ exitCode }) => {
       const s = sessions.get(wc.id);
-      if (s && s.pty === proc) sessions.delete(wc.id);
+      if (!s || s.pty !== proc) return; // an older shell that was replaced or restarted: nothing to report
+      sessions.delete(wc.id);
       if (!wc.isDestroyed()) wc.send('term:exit', exitCode);
     });
     wc.once('destroyed', () => kill(wc.id));
@@ -66,7 +67,19 @@ function createTerminal({ ipcMain, clipboard, isTerminalSender, getStartDir, loa
   ipcMain.handle('term:clip-read', (e) => (isTerminalSender(e) ? clipboard.readText() : ''));
   ipcMain.on('term:clip-write', (e, text) => { if (isTerminalSender(e) && typeof text === 'string') clipboard.writeText(text.slice(0, 1e6)); });
 
-  return { killAll: () => { for (const id of [...sessions.keys()]) kill(id); }, count: () => sessions.size };
+  // "Open in PowerShell here": move the open shell to a folder. Single quotes (including the curly ones PowerShell also treats as quotes) are doubled.
+  const cd = (dir) => {
+    if (typeof dir !== 'string' || !dir || dir.length > 1000 || /[\u0000-\u001f]/.test(dir)) return false;
+    const q = dir.replace(/(['\u2018\u2019\u201a\u201b])/g, '$1$1');
+    let n = 0;
+    for (const s of sessions.values()) { try { s.pty.write('\x1b' + "Set-Location -LiteralPath '" + q + "'\r"); n++; } catch { /* closed */ } }
+    return n > 0;
+  };
+  // Ends the open shell and tells the page to start a new one (which starts in the folder getStartDir gives).
+  const restart = () => {
+    for (const [id, s] of [...sessions.entries()]) { kill(id); try { if (!s.wc.isDestroyed()) s.wc.send('term:restart'); } catch { /* page gone */ } }
+  };
+  return { cd, restart, hasSession: () => sessions.size > 0, killAll: () => { for (const id of [...sessions.keys()]) kill(id); }, count: () => sessions.size };
 }
 
 module.exports = { createTerminal, findShell };

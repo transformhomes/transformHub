@@ -1,5 +1,6 @@
-// Searching file names on this PC through the Windows search index (the same index File Explorer's search box uses).
-// Only file and folder names are searched, only in places Windows already indexes, and nothing is changed.
+// Searching file names on this PC. Uses Everything (voidtools) when it is installed (see everything.js), otherwise the
+// Windows search index (the same index File Explorer's search box uses).
+// Only file and folder names are searched, and nothing is changed.
 const { execFile } = require('child_process');
 
 const MAX_RESULTS = 20;
@@ -50,19 +51,32 @@ function parseRows(text) {
   return out;
 }
 
-// run(query) -> Promise<string> (replaceable in tests)
-function createFileSearch({ run = defaultRun, platform = process.platform } = {}) {
+// What to tell the person when Everything cannot answer
+function everythingMessage(err) {
+  const code = err && err.code;
+  if (code === 'NOWINDOW') return 'Everything is not running. It was started in the background: try again in a few seconds.';
+  if (code === 'TIMEOUT' || code === 'NOREPLY') return 'Everything did not answer. Check that it is running and try again.';
+  return 'Could not search with Everything just now. See everything-diagnostics.log in the app data folder.';
+}
+
+// Everything's rows are "path<TAB>F or D"; the Windows search rows are "path<TAB>type". Both end up as the same list.
+function fromEverything(text) {
+  return String(text || '').split('\n').map((l) => { const [p, k] = l.split('\t'); return p ? p + '\t' + (k === 'D' ? 'Directory' : 'File') : ''; }).join('\n');
+}
+
+// run(query) -> Promise<string> (replaceable in tests); everything = { query(q) -> Promise<string> } when Everything is in use
+function createFileSearch({ run = defaultRun, platform = process.platform, everything = null } = {}) {
   let latest = [];
   async function search(raw) {
     const q = cleanQuery(raw);
     if (q.length < 2) return { ok: true, results: [] };
-    if (platform !== 'win32' && run === defaultRun) return { ok: true, results: [] }; // only Windows has the search index
+    if (!everything && platform !== 'win32' && run === defaultRun) return { ok: true, results: [] }; // only Windows has the search index
     try {
-      latest = parseRows(await run(q));
+      latest = parseRows(everything ? fromEverything(await everything.query(q)) : await run(q));
       return { ok: true, results: latest.map((r, id) => ({ id, name: r.name, folder: r.folder, isFolder: r.isFolder })) };
-    } catch {
+    } catch (err) {
       latest = [];
-      return { ok: false, error: 'Windows search is not available right now. Check that the Windows Search service is running.' };
+      return { ok: false, error: everything ? everythingMessage(err) : 'Windows search is not available right now. Check that the Windows Search service is running.' };
     }
   }
   // Only a path from the latest results can be opened
@@ -70,4 +84,4 @@ function createFileSearch({ run = defaultRun, platform = process.platform } = {}
   return { search, pick };
 }
 
-module.exports = { createFileSearch, cleanQuery, parseRows, SEARCH_SCRIPT, MAX_RESULTS };
+module.exports = { createFileSearch, cleanQuery, parseRows, fromEverything, SEARCH_SCRIPT, MAX_RESULTS };

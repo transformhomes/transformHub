@@ -42,6 +42,17 @@
   .modal dl { display:grid; grid-template-columns:110px 1fr; gap:6px 12px; margin:12px 0 16px; }
   .modal dt { color:var(--muted); }
   .modal dd { margin:0; word-break:break-all; user-select:text; }
+  .iv { margin-top:10px; display:flex; flex-direction:column; height:calc(100vh - 250px); min-height:260px; }
+  .iv.full { position:fixed; inset:0; z-index:50; margin:0; height:auto; padding:8px 12px 12px; background:var(--bg); }
+  .iv-bar { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin-bottom:6px; }
+  .iv-bar button { padding:3px 10px; }
+  .iv-bar button:disabled { opacity:.4; cursor:default; }
+  .iv-sep { width:1px; height:18px; background:var(--line); margin:0 6px; }
+  .iv-pct, .iv-count { font-size:12.5px; color:var(--muted); min-width:44px; text-align:center; }
+  .iv-stage { flex:1; min-height:0; overflow:auto; display:flex; border-radius:10px; border:1px solid var(--line); background:var(--well, var(--panel)); outline:none; }
+  .iv-stage.pan { cursor:grab; } .iv-stage.grab { cursor:grabbing; }
+  .iv-box { position:relative; margin:auto; flex:none; }
+  .iv-box img { position:absolute; left:50%; top:50%; max-width:none; user-select:none; -webkit-user-drag:none; }
   img.preview { max-width:100%; max-height:calc(100vh - 260px); margin-top:12px; border-radius:8px; border:1px solid var(--line); background:var(--well); }
   body { overflow:hidden; }
   .split { display:flex; height:100vh; }
@@ -447,21 +458,133 @@
       atRoot && proj && tasksBlock(p));
   }
 
+  // ---- Image viewer: zoom, rotate, next/previous photo in the folder, full window ----
+  const IMG_EXT = /\.(png|jpe?g|jfif|gif|webp|bmp|avif|svg|ico)$/i;
+  const iv = { full: false, fit: true, zoom: 1, rot: 0, path: null, siblings: null, sibKey: null, api: null };
+  function imageViewer(p, f, name) {
+    if (iv.path !== loc.project + '|' + loc.path) { iv.path = loc.project + '|' + loc.path; iv.fit = true; iv.zoom = 1; iv.rot = 0; }
+    const img = h('img', { src: f.dataUrl, alt: name, draggable: 'false' });
+    const box = h('div', { class: 'iv-box' }, img);
+    const stage = h('div', { class: 'iv-stage', tabindex: '0', 'aria-label': 'Photo: ' + name }, box);
+    const pct = h('span', { class: 'iv-pct' });
+    const count = h('span', { class: 'iv-count' });
+    const btn = (text, title, fn) => h('button', { class: 'ghost', title, 'aria-label': title, onclick: fn }, text);
+    const prevB = btn('‹ Previous', 'Previous photo in this folder (Left arrow)', () => step(-1));
+    const nextB = btn('Next ›', 'Next photo in this folder (Right arrow)', () => step(1));
+    const fullB = btn(iv.full ? 'Exit full view' : 'Full view', 'Fill the window (F), Esc to leave', () => api.full(!iv.full));
+    const bar = h('div', { class: 'iv-bar' }, prevB, count, nextB, h('span', { class: 'iv-sep' }),
+      btn('−', 'Zoom out (-)', () => api.zoomBy(1 / 1.25)), pct, btn('+', 'Zoom in (+)', () => api.zoomBy(1.25)),
+      btn('Fit', 'Fit the photo to the window (0)', () => { iv.fit = true; layout(); }),
+      btn('100%', 'Actual size (1)', () => { iv.fit = false; iv.zoom = 1; layout(); }),
+      btn('⟲', 'Rotate left (Shift+R)', () => api.rotate(-90)), btn('⟳', 'Rotate right (R)', () => api.rotate(90)),
+      h('span', { class: 'iv-sep' }), fullB);
+    const wrap = h('div', { class: 'iv' + (iv.full ? ' full' : '') }, bar, stage);
+
+    function fitScale() {
+      const W = img.naturalWidth || 1, H = img.naturalHeight || 1;
+      const turned = iv.rot % 180 !== 0;
+      const w = turned ? H : W, hh = turned ? W : H;
+      return Math.min((stage.clientWidth - 2) / w, (stage.clientHeight - 2) / hh, 1);
+    }
+    function layout() {
+      const W = img.naturalWidth, H = img.naturalHeight;
+      if (!W || !H) return;
+      const s = iv.fit ? fitScale() : iv.zoom;
+      const turned = iv.rot % 180 !== 0;
+      box.style.width = Math.round((turned ? H : W) * s) + 'px';
+      box.style.height = Math.round((turned ? W : H) * s) + 'px';
+      img.style.width = Math.round(W * s) + 'px';
+      img.style.height = Math.round(H * s) + 'px';
+      img.style.transform = 'translate(-50%, -50%) rotate(' + iv.rot + 'deg)';
+      pct.textContent = Math.round(s * 100) + '%';
+      stage.classList.toggle('pan', !iv.fit && (box.offsetWidth > stage.clientWidth || box.offsetHeight > stage.clientHeight));
+    }
+    const api = {
+      zoomBy(k) { const cur = iv.fit ? fitScale() : iv.zoom; iv.fit = false; iv.zoom = Math.max(0.05, Math.min(8, cur * k)); layout(); },
+      rotate(d) { iv.rot = (iv.rot + d + 360) % 360; layout(); },
+      full(on) { iv.full = on; wrap.classList.toggle('full', on); fullB.textContent = on ? 'Exit full view' : 'Full view'; layout(); stage.focus(); },
+      step, layout, alive: () => wrap.isConnected,
+    };
+    iv.api = api;
+    img.addEventListener('load', layout);
+    img.addEventListener('error', () => { stage.replaceChildren(h('div', { class: 'empty', text: 'This picture could not be shown. Use Open to view it in its own app.' })); });
+    new ResizeObserver(layout).observe(stage);
+    stage.addEventListener('dblclick', () => { if (iv.fit) { iv.fit = false; iv.zoom = 1; } else iv.fit = true; layout(); });
+    stage.addEventListener('wheel', (ev) => { if (!ev.ctrlKey) return; ev.preventDefault(); api.zoomBy(ev.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
+    // drag to move around a zoomed-in photo
+    let drag = null;
+    stage.addEventListener('pointerdown', (ev) => { if (ev.button !== 0 || !stage.classList.contains('pan')) return; drag = { x: ev.clientX, y: ev.clientY, l: stage.scrollLeft, t: stage.scrollTop }; stage.setPointerCapture(ev.pointerId); stage.classList.add('grab'); });
+    stage.addEventListener('pointermove', (ev) => { if (!drag) return; stage.scrollLeft = drag.l - (ev.clientX - drag.x); stage.scrollTop = drag.t - (ev.clientY - drag.y); });
+    const endDrag = () => { drag = null; stage.classList.remove('grab'); };
+    stage.addEventListener('pointerup', endDrag); stage.addEventListener('pointercancel', endDrag);
+
+    // the other photos in this folder, in the same order as the folder list
+    const folder = parentOf(loc.path), key = loc.project + '|' + folder, here = loc.path;
+    function paintNav() {
+      const list = iv.sibKey === key ? iv.siblings : null;
+      const i = list ? list.indexOf(here) : -1;
+      prevB.disabled = !(list && i > 0);
+      nextB.disabled = !(list && i >= 0 && i < list.length - 1);
+      count.textContent = list && i >= 0 ? (i + 1) + ' of ' + list.length : '';
+    }
+    function step(d) {
+      const list = iv.sibKey === key ? iv.siblings : null;
+      const i = list ? list.indexOf(here) : -1;
+      if (i < 0 || !list[i + d]) return;
+      goTo(p.id, list[i + d]);
+    }
+    paintNav();
+    if (iv.sibKey !== key) {
+      window.cc.listDir(p.id, folder).then((r) => {
+        if (!r || !r.ok || !Array.isArray(r.entries)) return;
+        iv.sibKey = key;
+        iv.siblings = r.entries.filter((e) => !e.dir && IMG_EXT.test(e.name)).map((e) => (folder ? folder + '/' : '') + e.name);
+        paintNav();
+      }).catch(() => {});
+    }
+    return wrap;
+  }
+  document.addEventListener('keydown', (e) => {
+    const a = iv.api;
+    if (!a || !a.alive() || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.target.closest && e.target.closest('input, textarea, select, .ctx, .modal')) return;
+    const k = e.key;
+    if (k === 'ArrowLeft') a.step(-1);
+    else if (k === 'ArrowRight') a.step(1);
+    else if (k === '+' || k === '=') a.zoomBy(1.25);
+    else if (k === '-') a.zoomBy(1 / 1.25);
+    else if (k === '0') { iv.fit = true; a.layout(); }
+    else if (k === '1') { iv.fit = false; iv.zoom = 1; a.layout(); }
+    else if (k === 'r' || k === 'R') a.rotate(e.shiftKey ? -90 : 90);
+    else if (k === 'f' || k === 'F') a.full(!iv.full);
+    else if (k === 'Escape' && iv.full) a.full(false);
+    else return;
+    e.preventDefault();
+  });
+
   function renderFile(p) {
     const f = view.file;
     const name = loc.path.split('/').pop();
     let body;
     if (!f || !f.ok) body = h('div', { class: 'msg err', text: (f && f.error) || 'Could not read this file.' });
     else if (f.kind === 'text') body = [h('pre', { class: 'preview', text: f.text }), f.truncated && h('div', { class: 'muted', style: 'margin-top:8px', text: 'Showing the first part of this file. Open it to see the rest.' })];
-    else if (f.kind === 'image') body = h('img', { class: 'preview', src: f.dataUrl, alt: name });
+    else if (f.kind === 'image') body = imageViewer(p, f, name);
     else body = h('div', { class: 'empty', text: f.note || 'No preview for this type of file. Use Open to view it in its own app.' });
     show(crumbs(p), h('h1', { style: 'word-break:break-word', text: name }), h('p', { class: 'sub', text: sizeLabel(view.info.size) + ' · modified ' + dateLabel(view.info.mtime) }),
       h('div', { class: 'row actions' },
         h('button', { class: 'primary', onclick: () => act(() => window.cc.openFile(p.id, loc.path), 'Opened.') }, 'Open'),
         h('button', { onclick: () => act(() => window.cc.revealFile(p.id, loc.path), 'Shown in File Explorer.') }, 'Show in File Explorer'),
         ...openWithButtons(p),
+        webButton(p),
         h('button', { class: 'ghost', onclick: () => goTo(p.id, parentOf(loc.path)) }, '‹ Back to folder')),
       noteBox(), body);
+  }
+
+  // Office on the web (Excel, Word, PowerPoint) for files it can open; same as the right-click menu item
+  function webButton(p) {
+    const ext = (/\.[^./]+$/.exec(loc.path) || [''])[0].toLowerCase();
+    const web = WEB_EXT[ext];
+    return web ? h('button', { onclick: () => openWeb(p, loc.path, web) }, 'Open in ' + web + ' (web)') : null;
   }
 
   function openWithButtons(p) {

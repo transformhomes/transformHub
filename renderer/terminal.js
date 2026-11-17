@@ -12,23 +12,38 @@
   term.open(document.getElementById('t'));
   const refit = () => { try { fit.fit(); window.term.resize(term.cols, term.rows); } catch { /* not visible yet */ } };
 
-  // Ctrl+C copies when text is selected (otherwise it interrupts, as normal); Ctrl+V and Ctrl+Shift+V paste.
+  // Copy and paste. Ctrl+C copies when text is selected (otherwise it interrupts, as normal). Ctrl+V, Ctrl+Shift+V and Shift+Insert paste;
+  // Ctrl+Shift+C and Ctrl+Insert copy. Right-click copies a selection, or pastes when nothing is selected. Each goes through one path only,
+  // so nothing is pasted twice, and a failure shows a short message instead of doing nothing.
+  let flashTimer = null;
+  const flash = (text) => { say(text, false); clearTimeout(flashTimer); flashTimer = setTimeout(() => say(''), 2500); };
+  const copySel = () => {
+    if (!term.hasSelection()) return false;
+    try { window.term.clipWrite(term.getSelection()); term.clearSelection(); } catch (err) { flash('Copy failed: ' + (err && err.message || err)); }
+    return true;
+  };
+  const pasteClip = async () => {
+    try {
+      const t = await window.term.clipRead();
+      if (t) term.paste(t); else flash('The clipboard has no text to paste.');
+    } catch (err) { flash('Paste failed: ' + (err && err.message || err)); }
+  };
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown') return true;
     const k = ev.key.toLowerCase();
-    if (ev.ctrlKey && k === 'c' && term.hasSelection()) { window.term.clipWrite(term.getSelection()); term.clearSelection(); return false; }
-    if (ev.ctrlKey && k === 'v') { window.term.clipRead().then((t) => { if (t) term.paste(t); }); return false; }
+    if ((ev.ctrlKey && k === 'c' && (ev.shiftKey || term.hasSelection())) || (ev.ctrlKey && !ev.shiftKey && k === 'insert')) { ev.preventDefault(); copySel(); return false; }
+    if ((ev.ctrlKey && k === 'v') || (ev.shiftKey && !ev.ctrlKey && k === 'insert')) { ev.preventDefault(); pasteClip(); return false; }
     return true;
   });
   document.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
-    if (term.hasSelection()) { window.term.clipWrite(term.getSelection()); term.clearSelection(); }
-    else window.term.clipRead().then((t) => { if (t) term.paste(t); });
+    if (!copySel()) pasteClip();
   });
 
   term.onData((d) => window.term.input(d));
   window.term.onData((d) => term.write(d));
   let running = false;
+  window.term.onRestart(() => { term.reset(); start(); });
   window.term.onExit((code) => { running = false; say('PowerShell closed (code ' + code + ').', true); });
 
   async function start() {

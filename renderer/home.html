@@ -2,7 +2,7 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src data:; frame-src file:">
 <title>Home</title>
 <link rel="stylesheet" href="shared.css">
 <style>
@@ -184,6 +184,39 @@
   .mc-more { font-size:11px; color:var(--muted); margin-top:2px; }
   .mc-detail { margin-top:8px; }
   .thumb { display:grid; place-items:center; font-size:22px; font-weight:700; color:color-mix(in srgb, var(--c) 70%, var(--fg)); }
+  /* calendar, Morning Brief and ORACLE: one card, panels that slide */
+  .cb { padding-bottom:10px; overflow:hidden; }
+  .cb-tabs { display:flex; align-items:center; gap:6px; margin:0 0 8px; flex-wrap:wrap; }
+  .cb-tab { border:1px solid transparent; background:transparent; border-radius:14px; padding:3px 12px; font:inherit; font-size:13px; color:var(--muted); cursor:pointer; }
+  .cb-tab:hover { background:var(--hover); }
+  .cb-tab.on { background:color-mix(in srgb, var(--c) 16%, transparent); color:var(--c); font-weight:700; border-color:color-mix(in srgb, var(--c) 35%, transparent); }
+  .cb-tab .pill { font-size:11px; font-weight:600; opacity:.8; margin-left:4px; }
+  .cb-dots { margin-left:auto; display:flex; gap:5px; align-items:center; }
+  .cb-dots i { width:7px; height:7px; border-radius:50%; background:var(--line-strong, var(--line)); display:block; transition:background .25s, transform .25s; }
+  .cb-dots i.on { background:var(--c); transform:scale(1.25); }
+  .cb-arrow { border:0; background:transparent; color:var(--muted); font-size:16px; line-height:1; padding:2px 6px; border-radius:8px; cursor:pointer; }
+  .cb-arrow:hover { background:var(--hover); color:var(--fg); }
+  .cb-view { overflow:hidden; }
+  .cb-track { display:flex; transition:transform .38s cubic-bezier(.4,0,.2,1); }
+  @media (prefers-reduced-motion:reduce) { .cb-track { transition:none; } }
+  .cb-pane { flex:none; min-width:0; padding:0 2px; box-sizing:border-box; }
+  .cb-pane[inert] { visibility:hidden; }
+  .cb-brief { position:relative; min-height:470px; }
+  .cb.tall .cb-brief { min-height:calc(100vh - 150px); }
+  .cb-fill { position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
+  .cb-bhead { display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap; }
+  .cb-bhead h2 { margin:0; font-size:14px; flex:1; min-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:flex; align-items:center; gap:8px; }
+  .cb-bhead .meta { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .cb-bhead select { font:inherit; font-size:12.5px; padding:2px 6px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); max-width:210px; }
+  .cb-chip { border:1px solid var(--line); background:transparent; border-radius:10px; padding:3px 10px; font:inherit; font-size:12.5px; color:var(--fg); cursor:pointer; text-align:left; line-height:1.2; }
+  .cb-chip small { display:block; color:var(--muted); font-size:11px; }
+  .cb-chip:hover { border-color:var(--c); }
+  .cb-chip.on { border-color:var(--c); background:color-mix(in srgb, var(--c) 14%, transparent); font-weight:600; }
+  .cb-chip[disabled] { opacity:.5; cursor:default; }
+  .cb-note { font-size:12.5px; padding:6px 10px; margin-bottom:6px; border-radius:8px; background:color-mix(in srgb, #e58f12 14%, transparent); border:1px solid color-mix(in srgb, #e58f12 35%, transparent); }
+  .cb-scroll { flex:1; min-height:0; overflow:auto; border-radius:10px; border:1px solid var(--line); background:#fff; }
+  .cb-pdf { flex:1; min-height:0; width:100%; border:1px solid var(--line); border-radius:10px; background:#fff; }
+  .cb-msg { padding:24px 16px; color:var(--muted); text-align:center; font-size:13.5px; }
 </style>
 </head>
 <body>
@@ -505,10 +538,10 @@
     const upcoming = sortEvents(evs.filter((e) => e.date >= today && e.date <= addDays(today, 7)));
     const comingUp = card('Coming up', upcoming.length, upcoming.length ? h('div', {}, upcoming.slice(0, 6).map((e) => evLine(e, e.date !== today))) : h('div', { class: 'empty', text: 'Nothing in the next 7 days.' }), 'c-orange');
     const tasksCard = card('Tasks', sorted.length, h('div', {}, taskBody), 'c-blue', null, 's5');
-    const wk = calendarCard(evs, sorted); wk.classList.add('s7');
+    const wk = slideCard(calendarCard(evs, sorted)); wk.classList.add('s7');
     const pj = projectsCard(tasks); pj.classList.add('s7');
     const stack = h('div', { class: 'stack s5' }, focusCard(), comingUp);
-    el('cols').replaceChildren(...[tasksCard, wk, pj, stack, newsCard('news', 'News', 'c-amber'), newsCard('finance', 'Financial news', 'c-pink'), newsCard('music', 'Music news', 'c-indigo'), newsCard('gigs', 'Melbourne gig guide', 'c-cyan')].filter(Boolean));
+    placeChildren(el('cols'), [tasksCard, wk, pj, stack, newsCard('news', 'News', 'c-amber'), newsCard('finance', 'Financial news', 'c-pink'), newsCard('music', 'Music news', 'c-indigo'), newsCard('gigs', 'Melbourne gig guide', 'c-cyan')].filter(Boolean));
 
     // One row: unread email (when Outlook is readable), task numbers, events today, and what is next
     const stat = (n, label, cls, onclick, title) => h(onclick ? 'button' : 'div', { class: 'stat-t ' + cls, onclick: onclick || null, title: title || null },
@@ -595,7 +628,7 @@
     const rows = [];
     if (fp) {
       const n = App.data.tasks.filter((t) => !t.done && t.project === fp.id).length;
-      rows.push(h('button', { class: 'linkrow focusrow', onclick: () => window.cc.go('projects'), title: 'Open the Explorer' },
+      rows.push(h('button', { class: 'linkrow focusrow', onclick: () => window.cc.navigate({ section: 'projects', project: fp.id, path: '' }), title: 'Open the Explorer' },
         h('span', { class: 'ar', text: '★' }), h('span', { class: 'grow', text: fp.name }), h('span', { class: 'tag accent', text: 'Focus · ' + n + (n === 1 ? ' task' : ' tasks') })));
     }
     for (const f of favs) {
@@ -661,6 +694,235 @@
       h('span', {}, h('button', { class: 'ghost', 'aria-label': 'Previous week', onclick: () => shift(-1), text: '‹' }), h('button', { class: 'ghost', onclick: () => { weekStart = mondayOf(new Date()); render(); }, text: 'Today' }), h('button', { class: 'ghost', 'aria-label': 'Next week', onclick: () => shift(1), text: '›' })));
   }
 
+
+  // ---- Calendar, Morning Brief and ORACLE: one card, panels that slide ----
+  // The card is built once and kept, so a page refresh does not reset your place in the brief or reload the report.
+  let briefState = { enabled: true, status: 'idle', html: '', date: '', subject: '', updated: null };
+  let oracleRep = { ok: false, kinds: [] };
+  let oracleKind = 'daily';
+  const oraclePick = {};   // kind -> file name chosen from the "older" list (empty = newest)
+  let oracleShown = false; // the report is only loaded once you open the ORACLE panel
+  let cbPane = 0;
+  let cbAuto = true;       // until you pick a panel yourself, open on the brief in the morning
+  let cbTall = false;
+  let briefBusy = false;
+  let briefHost = null, briefShown = null;
+  let cb = null;
+  const BRIEF_TAGS = new Set(['a','b','strong','i','em','u','s','br','p','div','span','h1','h2','h3','h4','h5','h6','ul','ol','li','table','thead','tbody','tfoot','tr','td','th','hr','small','sub','sup','blockquote','font','center','section','article','header','footer','main','pre','code','caption','col','colgroup','img','dl','dt','dd','mark','label']);
+  const BRIEF_DROP = new Set(['script','style','iframe','frame','object','embed','form','input','button','select','textarea','svg','picture','video','audio','canvas','link','meta','title','head','noscript','template','base','applet','math']);
+  const BRIEF_ATTR = new Set(['style','colspan','rowspan','align','valign','width','height','bgcolor','color','border','cellpadding','cellspacing','title','alt']);
+  // Only text, tables and styling are kept: no scripts, links, forms or pictures from the internet ever reach the page.
+  function cleanStyle(v) {
+    return String(v || '').split(';').map((d) => d.trim()).filter((d) => d && !/url\s*\(|expression|@import|behavior|javascript:|position\s*:|z-index|-moz-binding/i.test(d)).join(';');
+  }
+  function cleanBriefHtml(html) {
+    const doc = new DOMParser().parseFromString('<!doctype html><body>' + html, 'text/html');
+    const frag = document.createDocumentFragment();
+    let n = 0;
+    const copy = (src, dst, depth) => {
+      for (const node of src.childNodes) {
+        if (++n > 30000 || depth > 80) return;
+        if (node.nodeType === 3) { dst.append(document.createTextNode(node.nodeValue)); continue; }
+        if (node.nodeType !== 1) continue;
+        const tag = node.tagName.toLowerCase();
+        if (BRIEF_DROP.has(tag)) continue;
+        if (!BRIEF_TAGS.has(tag)) { copy(node, dst, depth + 1); continue; } // unknown tag: keep its text only
+        if (tag === 'img') { // only pictures that are part of the email itself
+          const src0 = node.getAttribute('src') || '';
+          if (!/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/.test(src0) || src0.length > 400000) continue;
+        }
+        const out = document.createElement(tag === 'a' ? 'span' : tag); // a link keeps its look but cannot be followed
+        for (const a of node.attributes) {
+          const name = a.name.toLowerCase();
+          if (!BRIEF_ATTR.has(name)) continue;
+          if (name === 'style') { const st = cleanStyle(a.value); if (st) out.setAttribute('style', st); }
+          else out.setAttribute(name, String(a.value).slice(0, 200));
+        }
+        if (tag === 'img') out.setAttribute('src', node.getAttribute('src'));
+        copy(node, out, depth + 1);
+        dst.append(out);
+      }
+    };
+    copy(doc.body, frag, 0);
+    return frag;
+  }
+  function briefContent() {
+    if (!briefHost) {
+      briefHost = document.createElement('div');
+      briefHost.attachShadow({ mode: 'open' });
+    }
+    if (briefShown !== briefState.html) {
+      briefShown = briefState.html;
+      const root = briefHost.shadowRoot;
+      root.replaceChildren();
+      const st = document.createElement('style');
+      st.textContent = ':host{all:initial;display:block}.paper{background:#fff;color:#222;font:14px/1.45 "Segoe UI",Arial,sans-serif;padding:8px 10px;overflow-wrap:anywhere}.paper table{max-width:100%}.paper img{max-width:100%;height:auto}';
+      const paper = document.createElement('div');
+      paper.className = 'paper';
+      paper.append(cleanBriefHtml(briefState.html || ''));
+      root.append(st, paper);
+    }
+    return briefHost;
+  }
+
+  const PANE_NAMES = { cal: 'Calendar', brief: 'Morning Brief', oracle: 'ORACLE' };
+  const paneList = () => ['cal', ...(briefState.enabled === false ? [] : ['brief']), ...(oracleRep.ok ? ['oracle'] : [])];
+  const repWhen = (f) => {
+    if (!f) return '';
+    const d = f.date ? fmtDate(f.date, { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+    return d + (f.time ? (d ? ', ' : '') + fmtTime(f.time) : '');
+  };
+  const oracleFiles = (k) => ((oracleRep.kinds || []).find((x) => x.key === k) || { files: [] }).files;
+  const oracleFile = (k) => { const fs = oracleFiles(k); return fs.find((f) => f.name === oraclePick[k]) || fs[0] || null; };
+
+  function buildCb(panes) {
+    const n = panes.length;
+    const els = { sig: panes.join(','), panes, pane: {}, tab: {}, pill: {} };
+    const track = h('div', { class: 'cb-track', style: 'width:' + (n * 100) + '%' });
+    for (const p of panes) {
+      const pane = h('div', { class: 'cb-pane' + (p === 'cal' ? '' : ' cb-brief'), style: 'width:' + (100 / n) + '%', 'aria-label': PANE_NAMES[p] });
+      els.pane[p] = pane;
+      track.append(pane);
+    }
+    if (els.pane.brief) {
+      els.bHead = h('div', { class: 'cb-bhead' }); els.bNotes = h('div', {}); els.bScroll = h('div', { class: 'cb-scroll' });
+      els.pane.brief.append(h('div', { class: 'cb-fill' }, els.bHead, els.bNotes, els.bScroll));
+    }
+    if (els.pane.oracle) {
+      els.oHead = h('div', { class: 'cb-bhead' }); els.oBody = h('div', { style: 'flex:1;min-height:0;display:flex;flex-direction:column' });
+      els.pane.oracle.append(h('div', { class: 'cb-fill' }, els.oHead, els.oBody));
+    }
+    const go = (i) => { cbPane = Math.max(0, Math.min(n - 1, i)); cbAuto = false; sync(); if (panes[cbPane] === 'oracle') { oracleShown = true; updateOracle(); } };
+    const dots = panes.map(() => h('i'));
+    const tabs = h('div', { class: 'cb-tabs', role: 'tablist' });
+    panes.forEach((p, i) => {
+      els.pill[p] = h('span', { class: 'pill' });
+      els.tab[p] = h('button', { class: 'cb-tab', role: 'tab', onclick: () => go(i) }, PANE_NAMES[p], els.pill[p]);
+      tabs.append(els.tab[p]);
+    });
+    els.tallBtn = h('button', { class: 'cb-arrow', title: 'Make this card taller or shorter', 'aria-label': 'Make this card taller or shorter', text: '⤢', onclick: () => { cbTall = !cbTall; outer.classList.toggle('tall', cbTall); } });
+    tabs.append(h('span', { class: 'cb-dots' },
+      h('button', { class: 'cb-arrow', 'aria-label': 'Previous panel', text: '‹', onclick: () => go(cbPane - 1) }), dots,
+      h('button', { class: 'cb-arrow', 'aria-label': 'Next panel', text: '›', onclick: () => go(cbPane + 1) }), els.tallBtn));
+    const view = h('div', { class: 'cb-view' }, track);
+    function sync() {
+      if (cbPane > n - 1) cbPane = n - 1;
+      track.style.transform = 'translateX(' + (cbPane * -100 / n) + '%)';
+      panes.forEach((p, i) => {
+        els.tab[p].classList.toggle('on', i === cbPane);
+        els.tab[p].setAttribute('aria-selected', i === cbPane ? 'true' : 'false');
+        dots[i].classList.toggle('on', i === cbPane);
+        els.pane[p].toggleAttribute('inert', i !== cbPane);
+      });
+    }
+    let wheelAt = 0;
+    view.addEventListener('wheel', (ev) => {
+      if (Math.abs(ev.deltaX) < 30 || Math.abs(ev.deltaX) < Math.abs(ev.deltaY) * 1.5 || Date.now() - wheelAt < 600) return;
+      wheelAt = Date.now(); go(cbPane + (ev.deltaX > 0 ? 1 : -1));
+    }, { passive: true });
+    tabs.addEventListener('keydown', (ev) => { if (ev.key === 'ArrowRight') go(cbPane + 1); else if (ev.key === 'ArrowLeft') go(cbPane - 1); });
+    const outer = h('div', { class: 'card cb c-teal' + (cbTall ? ' tall' : '') }, tabs, view);
+    els.outer = outer; els.sync = sync;
+    return els;
+  }
+
+  function updateBrief() {
+    if (!cb || !cb.pane.brief) return;
+    const b = briefState;
+    const have = !!b.html;
+    const today = todayStr();
+    const msgs = {
+      signin: 'Sign in to Microsoft in the Inbox tab, then press Refresh.',
+      notfound: 'No email with "Morning Brief" in the subject was found in your Inbox.',
+      unreadable: 'Could not read the brief from Outlook just now.',
+      error: 'Could not read the brief from Outlook just now.',
+    };
+    const notes = [];
+    if (have && b.ok === false && msgs[b.status]) notes.push(msgs[b.status] + ' Showing the last one that was read.');
+    else if (have && b.date && b.date !== today) notes.push('This is the brief for ' + fmtDate(b.date, { weekday: 'short', day: 'numeric', month: 'short' }) + ". Today's has not been read yet.");
+    const title = b.date ? 'Morning Brief · ' + fmtDate(b.date, { weekday: 'short', day: 'numeric', month: 'short' }) : 'Morning Brief';
+    cb.bHead.replaceChildren(
+      h('h2', {}, h('span', { class: 'dot' }), h('span', { text: title })),
+      b.updated ? h('span', { class: 'meta', text: 'Read ' + whenLabel(b.updated) }) : '',
+      h('button', { class: 'ghost', onclick: () => window.cc.go('mail'), text: 'Open Inbox', title: 'Open the Inbox tab' }),
+      h('button', { class: 'ghost', disabled: briefBusy ? '' : false, onclick: () => loadBrief(true), text: briefBusy ? 'Refreshing…' : 'Refresh', title: 'Read the brief from Outlook again' }));
+    cb.bNotes.replaceChildren(...notes.map((t) => h('div', { class: 'cb-note', text: t })));
+    if (have) { const host = briefContent(); if (cb.bScroll.firstChild !== host || cb.bScroll.childNodes.length !== 1) cb.bScroll.replaceChildren(host); }
+    else cb.bScroll.replaceChildren(h('div', { class: 'cb-msg', text: b.ok === false && msgs[b.status] ? msgs[b.status] : (briefBusy || b.status === 'idle' ? 'Reading your Morning Brief from Outlook…' : 'No brief has been read yet.') }));
+    cb.pill.brief.textContent = b.date ? fmtDate(b.date, { day: 'numeric', month: 'short' }) : '';
+  }
+
+  function updateOracle() {
+    if (!cb || !cb.pane.oracle) return;
+    const kinds = oracleRep.kinds || [];
+    if (!kinds.some((k) => k.key === oracleKind && k.files.length)) oracleKind = (kinds.find((k) => k.files.length) || { key: 'daily' }).key;
+    const cur = oracleFile(oracleKind);
+    const files = oracleFiles(oracleKind);
+    const chips = kinds.map((k) => {
+      const f = oracleFile(k.key);
+      return h('button', { class: 'cb-chip' + (k.key === oracleKind ? ' on' : ''), disabled: f ? false : '', onclick: () => { oracleKind = k.key; updateOracle(); } },
+        k.label, h('small', { text: f ? repWhen(f) : 'None yet' }));
+    });
+    const older = files.length > 1 ? h('select', { 'aria-label': 'Choose an earlier report', onchange: (ev) => { oraclePick[oracleKind] = ev.target.value; updateOracle(); } },
+      files.map((f, i) => { const o = h('option', { value: f.name, text: (i === 0 ? 'Latest: ' : '') + repWhen(f) }); if (cur && f.name === cur.name) o.selected = true; return o; })) : '';
+    cb.oHead.replaceChildren(...chips, h('span', { class: 'grow' }), older,
+      h('button', { class: 'ghost', disabled: cur ? false : '', title: 'Open this report in your PDF program', text: 'Open', onclick: async () => { if (!cur) return; const r = await window.cc.openOracleReport(oracleKind, cur.name); if (!r || !r.ok) toast((r && r.error) || 'Could not open the report.'); } }));
+    const daily = oracleFile('daily');
+    cb.pill.oracle.textContent = daily && daily.date ? fmtDate(daily.date, { day: 'numeric', month: 'short' }) : '';
+    if (!cur) { cb.oFrame = null; cb.oBody.replaceChildren(h('div', { class: 'cb-msg', text: 'ORACLE has not saved any reports yet.' })); return; }
+    if (!oracleShown) return; // wait until the panel is opened
+    const src = cur.url + '#navpanes=0&view=FitH';
+    if (!cb.oFrame || cb.oFrame.getAttribute('src') !== src) {
+      cb.oFrame = h('iframe', { class: 'cb-pdf', src, title: cur.name });
+      cb.oBody.replaceChildren(cb.oFrame);
+    }
+  }
+
+  function slideCard(calCard) {
+    const panes = paneList();
+    if (panes.length === 1) { cb = null; return calCard; }
+    if (!cb || cb.sig !== panes.join(',')) { cb = buildCb(panes); if (panes[cbPane] === 'oracle') oracleShown = true; }
+    cb.pane.cal.replaceChildren(...calCard.childNodes);
+    updateBrief();
+    updateOracle();
+    cb.sync();
+    return cb.outer;
+  }
+
+  // Puts the cards in place without lifting out one that is already there (so the kept card is never reloaded).
+  function placeChildren(parent, nodes) {
+    const keep = new Set(nodes);
+    [...parent.children].forEach((c) => { if (!keep.has(c)) c.remove(); });
+    nodes.forEach((node, i) => { if (parent.children[i] !== node) parent.insertBefore(node, parent.children[i] || null); });
+  }
+
+  function applyBrief(b) {
+    const wasToday = briefState.date === todayStr() && !!briefState.html;
+    briefState = { ...briefState, ...b };
+    // first time today's brief arrives, and you have not chosen a panel: open on it in the morning
+    if (cbAuto && !wasToday && briefState.html && briefState.date === todayStr() && new Date().getHours() < 10) { const i = paneList().indexOf('brief'); if (i > 0) cbPane = i; }
+    render();
+  }
+  function loadBrief(force) {
+    if (!window.cc.getBrief) return Promise.resolve();
+    if (force) { briefBusy = true; updateBrief(); }
+    return (force ? window.cc.refreshBrief() : window.cc.getBrief())
+      .then((b) => { briefBusy = false; if (b) applyBrief(b); else updateBrief(); })
+      .catch(() => { briefBusy = false; updateBrief(); });
+  }
+  if (window.cc.onBrief) window.cc.onBrief((b) => applyBrief(b));
+  function loadOracle() {
+    if (!window.cc.getOracleReports) return Promise.resolve();
+    return window.cc.getOracleReports().then((r) => {
+      if (!r) return;
+      const before = JSON.stringify(oracleRep);
+      oracleRep = { ok: !!r.ok, kinds: Array.isArray(r.kinds) ? r.kinds : [] };
+      if (JSON.stringify(oracleRep) !== before) render();
+    }).catch(() => {});
+  }
+  setInterval(loadOracle, 5 * 60000);
+  window.addEventListener('focus', loadOracle);
+
   // Projects: open tasks, progress, and the newest entry from the project's own memory or log file
   function projectsCard(tasks) {
     const all = App.data.tasks;
@@ -669,7 +931,7 @@
       return { p, open: tasks.filter((t) => t.project === p.id).length, total: mine.length, done: mine.filter((t) => t.done).length, up: updates.get(p.id) };
     }).sort((a, b) => ((b.up ? b.up.mtime : 0) - (a.up ? a.up.mtime : 0)) || (b.open - a.open) || a.p.name.localeCompare(b.p.name));
     const body = list.length
-      ? h('div', {}, list.map(({ p, open, total, done, up }) => h('button', { class: 'pj' + (p.id === App.data.focusProject ? ' focus' : ''), onclick: () => window.cc.go('projects'), title: up ? 'From ' + up.file : 'Open the Explorer' },
+      ? h('div', {}, list.map(({ p, open, total, done, up }) => h('button', { class: 'pj' + (p.id === App.data.focusProject ? ' focus' : ''), onclick: () => window.cc.navigate({ section: 'projects', project: p.id, path: '' }), title: up ? 'From ' + up.file : 'Open the Explorer' },
           h('div', { class: 'pj-top' }, h('span', { class: 'nm', text: p.name }), h('span', { class: 'meta', text: open + (open === 1 ? ' open task' : ' open tasks') + (up ? ' · updated ' + whenLabel(up.mtime) : '') })),
           up && up.text && h('div', { class: 'upd', text: up.text }),
           total ? h('div', { class: 'bar', role: 'img', 'aria-label': done + ' of ' + total + ' done' }, h('i', { style: 'width:' + Math.round(done / total * 100) + '%' })) : null)))
@@ -791,6 +1053,8 @@
     loadWeather(false);
     loadNews(false);
     loadUpdates();
+    loadBrief(false);
+    loadOracle();
   });
   tickClock(); setInterval(tickClock, 1000);
   updateQuote(); setInterval(updateQuote, 30000);

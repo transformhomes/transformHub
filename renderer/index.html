@@ -178,9 +178,9 @@
       idOf: (b) => (b.dataset.id && b.dataset.id !== 'settings' ? b.dataset.id : null),
       onReorder: async (ids, focusId) => {
         const r = await window.cc.reorderSections(ids);
-        if (!r || !r.ok) return;
+        if (!r || !r.ok) { buildRail(); markCurrent(); return; }
         const byId = new Map(sections.map((x) => [x.id, x]));
-        sections = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id === 'settings')];
+        sections = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id !== 'settings' && x.type === 'disabled'), ...sections.filter((x) => x.id === 'settings')];
         buildRail(); markCurrent();
         if (focusId && buttons.get(focusId)) buttons.get(focusId).focus();
       },

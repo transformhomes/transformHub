@@ -6,6 +6,7 @@ const { createStore } = require('./store');
 const { createFeedService, validFeeds } = require('./feeds');
 const { createUiState } = require('./uistate');
 const { createTodoSync, completeSource, EXTRACT_SOURCE: TODO_SOURCE } = require('./todo');
+const { createBrief, drive: driveBrief } = require('./brief');
 const { createDrmd } = require('./drmd');
 const { createBrowser } = require('./browser');
 const { createOutlook } = require('./outlook');
@@ -13,6 +14,7 @@ const { buildSettings, rawSettingsError } = require('./settings');
 const { setupSpellcheck, contextTemplate } = require('./spell');
 const { createLock, MAX_PIN } = require('./lock');
 const { createFileSearch } = require('./filesearch');
+const { createEverything, findEverythingExe } = require('./everything');
 const { createRecent } = require('./recent');
 const { listBackups, restoreBackup } = require('./backups');
 const { execFile } = require('child_process');
@@ -58,6 +60,7 @@ let paletteView = null;
 let paletteOpen = false;
 let paletteH = PALETTE_MIN_H;
 let terminalService = null;
+let terminalNextDir = null; // a folder the PowerShell tab should start in (set by "Open in PowerShell here")
 const terminalContentsIds = new Set(); // webContents ids of the PowerShell tab's page
 const TERMINAL_DEFAULT_DIR = 'D:\\Projects\\IN_PROGRESS_PROJECTS';
 const localContentsIds = new Set(); // webContents ids of built-in pages allowed to use the data bridge
@@ -67,6 +70,21 @@ let browserService = null;
 let outlookService = null;
 let recentSvc = null;
 let fileSearch = null; // created on first use (a test can supply its own)
+let everythingSvc = null;
+// File search uses Everything (voidtools) when it is installed, because it does not need the Windows Search service.
+// Optional settings: "fileSearch": { "engine": "windows" } to force the Windows index, "everythingPath": "<Everything.exe>".
+function fileSearchService() {
+  if (fileSearch) return fileSearch;
+  const cfg = (loadedConfig && loadedConfig.fileSearch && typeof loadedConfig.fileSearch === 'object') ? loadedConfig.fileSearch : {};
+  const exe = process.platform === 'win32' && cfg.engine !== 'windows' ? findEverythingExe(cfg.everythingPath) : null;
+  if (exe) {
+    const logFile = path.join(app.getPath('userData'), 'everything-diagnostics.log');
+    const log = (line) => { try { fs.appendFileSync(logFile, new Date().toISOString() + ' ' + String(line).slice(0, 500) + '\n'); } catch { /* best effort */ } };
+    everythingSvc = createEverything({ exePath: exe, instance: cfg.everythingInstance, log });
+    fileSearch = createFileSearch({ everything: everythingSvc });
+  } else fileSearch = createFileSearch();
+  return fileSearch;
+}
 let testPickImage = null; // set by the test hook to stand in for the picture picker
 let testPickFolder = null; // set by the test hook to stand in for the folder picker
 let testPickApp = null; // set by the test hook to stand in for the file picker
@@ -200,8 +218,38 @@ function dataDir() {
   return d ? d : path.join(app.getPath('userData'), 'data');
 }
 
+// Projects shown on Home and in the Explorer: the ones in Settings, plus any folder found in the projects root
+// (default D:\Projects\IN_PROGRESS_PROJECTS). Anything under an "archived" folder is left out.
+// Optional settings: "projectsRoot": "<folder>", "hiddenProjects": ["<folder name>", ...].
+function effectiveProjects() {
+  const cfg = loadedConfig || {};
+  const isArchived = (p) => String(p || '').split(/[\\/]+/).some((seg) => seg.toLowerCase() === 'archived');
+  const norm = (p) => path.resolve(String(p || '')).toLowerCase();
+  const hidden = new Set((Array.isArray(cfg.hiddenProjects) ? cfg.hiddenProjects : []).map((x) => String(x).toLowerCase()));
+  const out = (Array.isArray(cfg.projects) ? cfg.projects : [])
+    .filter((p) => p && p.id && p.name && !isArchived(p.path) && !hidden.has(path.basename(String(p.path || '')).toLowerCase()))
+    .map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
+  const have = new Set(out.map((p) => norm(p.path)));
+  const ids = new Set(out.map((p) => p.id));
+  const root = typeof cfg.projectsRoot === 'string' && cfg.projectsRoot ? cfg.projectsRoot : TERMINAL_DEFAULT_DIR;
+  try {
+    for (const ent of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!ent.isDirectory()) continue;
+      const nm = ent.name;
+      if (/^[._]/.test(nm) || /^(archived|node_modules)$/i.test(nm) || hidden.has(nm.toLowerCase())) continue;
+      const full = path.join(root, nm);
+      if (have.has(norm(full))) continue;
+      let id = 'auto-' + nm.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      if (ids.has(id)) continue;
+      ids.add(id); have.add(norm(full));
+      out.push({ id, name: nm, path: full });
+    }
+  } catch (_) { /* root not available: configured projects only */ }
+  return out;
+}
+
 function findProject(id) {
-  const list = (loadedConfig && Array.isArray(loadedConfig.projects)) ? loadedConfig.projects : [];
+  const list = effectiveProjects();
   return list.find((p) => p && p.id === id && typeof p.path === 'string') || null;
 }
 
@@ -639,10 +687,11 @@ async function openInWeb(rootId, rel) {
 // Everything is resolved inside a configured project folder: no "..", no symlinks out, no drive letters.
 const HIDE_NAMES = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', '$RECYCLE.BIN', 'System Volume Information', '.DS_Store', 'Thumbs.db']);
 const RISKY_EXT = new Set(['.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.msp', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.mjs', '.wsf', '.wsh', '.hta', '.lnk', '.url', '.reg', '.jar', '.cpl', '.dll', '.sh', '.appx', '.msix', '.application', '.pif']);
-const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.jfif': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.avif': 'image/avif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+const IMAGE_NO_PREVIEW = new Set(['.heic', '.heif', '.tif', '.tiff', '.raw', '.dng', '.cr2', '.nef', '.arw', '.psd']);
 const TEXT_EXT = new Set(['', '.md', '.txt', '.json', '.csv', '.tsv', '.log', '.yml', '.yaml', '.toml', '.ini', '.xml', '.html', '.htm', '.css', '.js', '.mjs', '.ts', '.tsx', '.jsx', '.py', '.ps1', '.bat', '.cmd', '.sh', '.sql', '.env', '.gitignore']);
 const MAX_TEXT_BYTES = 300 * 1024;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 40 * 1024 * 1024; // phone and camera photos are often 5 to 15 MB
 
 function safeRel(rel) {
   if (rel == null || rel === '') return '';
@@ -703,9 +752,10 @@ function readPreview(id, rel) {
   const ext = path.extname(r.real).toLowerCase();
   try {
     if (IMAGE_MIME[ext]) {
-      if (st.size > MAX_IMAGE_BYTES) return { ok: true, kind: 'other', size: st.size, note: 'Image is too large to preview.' };
+      if (st.size > MAX_IMAGE_BYTES) return { ok: true, kind: 'other', size: st.size, note: 'This picture is too large to show here (over 40 MB). Use Open to view it in its own app.' };
       return { ok: true, kind: 'image', size: st.size, dataUrl: 'data:' + IMAGE_MIME[ext] + ';base64,' + fs.readFileSync(r.real).toString('base64') };
     }
+    if (IMAGE_NO_PREVIEW.has(ext)) return { ok: true, kind: 'other', size: st.size, note: 'This type of picture (' + ext.slice(1).toUpperCase() + ') cannot be shown here. Use Open to view it in its own app.' };
     if (TEXT_EXT.has(ext)) {
       const fd = fs.openSync(r.real, 'r');
       try {
@@ -817,6 +867,25 @@ async function scrapeTodoNow(routes, source) {
     if (result && result.state === 'signin') break;
   }
   return results;
+}
+
+// ---- Morning Brief reader: finds today's "Morning Brief" email in Outlook on the web (read-only, reuses the hidden Microsoft window) ----
+let briefService = null;
+function briefEnabled() { return !(loadedConfig && loadedConfig.morningBrief && loadedConfig.morningBrief.enabled === false); }
+function broadcastBrief(state) {
+  localContentsIds.forEach((id) => {
+    const wc = webContents.fromId(id);
+    if (wc && !wc.isDestroyed()) wc.send('brief:changed', state);
+  });
+}
+function scrapeBrief() {
+  return withTodoLock(async () => {
+    if (!win || win.isDestroyed()) throw new Error('no window');
+    const wc = ensureTodoView().webContents;
+    const url = process.env.CC_TEST_SCRIPT && process.env.CC_TEST_BRIEF_URL ? process.env.CC_TEST_BRIEF_URL : 'https://outlook.office.com/mail/';
+    const word = loadedConfig && loadedConfig.morningBrief && typeof loadedConfig.morningBrief.subject === 'string' && loadedConfig.morningBrief.subject.trim() ? loadedConfig.morningBrief.subject.trim().slice(0, 60) : undefined;
+    return driveBrief(wc, url, { word });
+  });
 }
 
 // ---- site icons: each web tab's own favicon, cached after the first visit ----
@@ -1153,6 +1222,27 @@ function attachClaudeDiagnostics(wc) {
   wc.on('console-message', (e) => { const lvl = e.level !== undefined ? e.level : 0; if (lvl === 'error' || lvl === 3) claudeLog('page error: ' + String(e.message || '').slice(0, 200)); });
 }
 
+// ---- Website tab diagnostics (Inbox, Teams, OneDrive and so on) ----
+// web-diagnostics.log in the app's data folder: when a website tab moved to another page, which moves were blocked, and when a page failed or crashed.
+// Web addresses are written without their query or fragment part (those can hold sign-in codes). No passwords, cookies or page text.
+function webLog(line) {
+  try {
+    const f = path.join(app.getPath('userData'), 'web-diagnostics.log');
+    try { if (fs.statSync(f).size > 300 * 1024) fs.renameSync(f, f + '.old'); } catch { /* new file */ }
+    fs.appendFileSync(f, new Date().toISOString() + ' ' + line + '\n');
+  } catch { /* diagnostics only */ }
+}
+const shortUrl = (u) => { try { const x = new URL(u); return x.protocol + '//' + x.host + x.pathname.slice(0, 120); } catch { return String(u).slice(0, 80); } };
+function attachWebDiagnostics(wc, section) {
+  const tag = '[' + section.id + '] ';
+  let n = 0, windowStart = Date.now();
+  const ok = () => { const now = Date.now(); if (now - windowStart > 60000) { windowStart = now; n = 0; } return ++n <= 300; }; // never floods the log
+  wc.on('did-start-navigation', (_e, url, isInPlace, isMainFrame) => { if (isMainFrame && ok()) webLog(tag + 'navigating ' + shortUrl(url) + (isInPlace ? ' (same page)' : '')); });
+  wc.on('did-fail-load', (_e, code, desc, url, isMain) => { if (isMain && code !== -3 && ok()) webLog(tag + 'failed to load ' + shortUrl(url) + ' ' + code + ' ' + desc); });
+  wc.on('render-process-gone', (_e, d) => webLog(tag + 'page process gone: ' + d.reason));
+  wc.on('unresponsive', () => webLog(tag + 'page not responding'));
+}
+
 // Closing the window must end the program. Tab pages are separate web contents that Electron does not close with the window,
 // so they (and the PowerShell tab's terminal) are closed by hand, and the program is made to exit a few seconds later if anything is still holding on.
 let exitTimer = null;
@@ -1210,6 +1300,7 @@ function createView(section) {
     wc.setUserAgent(chromeUserAgent());
     wc.loadURL(section.url);
     wc.on('page-favicon-updated', (_e, list) => cacheFavicon(section.id, list, wc.getURL()));
+    if (!isVaultUrl(section.url)) attachWebDiagnostics(wc, section);
   } else {
     wc.loadFile(path.join(__dirname, section.file));
   }
@@ -1230,9 +1321,17 @@ function createView(section) {
   });
 
   if (section.type === 'web') {
+    // A move to a site outside this tab's own lane is cancelled and opened in the Browser tab. If a page keeps trying (a sign-in loop),
+    // it is only cancelled after the third time in ten seconds, so the Browser tab does not keep taking over the screen.
+    const blocks = [];
     const guard = (event, url) => {
       if (allowedForSection(section, url)) return;
       event.preventDefault();
+      const now = Date.now();
+      while (blocks.length && now - blocks[0] > 10000) blocks.shift();
+      blocks.push(now);
+      if (blocks.length > 3) { if (blocks.length === 4) webLog('[' + section.id + '] blocked ' + shortUrl(url) + ' (repeating, no longer opened in the Browser tab)'); return; }
+      webLog('[' + section.id + '] blocked ' + shortUrl(url) + ' (opened in the Browser tab)');
       openInBrowserTab(url);
     };
     wc.on('will-navigate', guard);
@@ -1445,6 +1544,24 @@ function isWebContents(contents) {
   return false;
 }
 
+// An emailed sign-in link opens in whatever program Windows picks, so the sign-in lands in that program's cookies and not in the tab.
+// Alt+L loads the link on the clipboard inside the tab that has the focus (web tabs only, and only its own sign-in sites).
+function openClipboardLink(contents) {
+  let sec = null;
+  for (const [id, view] of views) {
+    if (view.webContents === contents) { sec = sections.find((x) => x.id === String(id).split('#')[0]) || null; break; }
+  }
+  if (!sec || sec.type !== 'web') return false;
+  let url = '';
+  try { url = String(clipboard.readText() || '').trim().split(/\s+/)[0]; } catch { url = ''; }
+  if (!/^https:\/\//i.test(url) || url.length > 4000 || !allowedForSection(sec, url)) {
+    if (win && !win.isDestroyed()) dialog.showMessageBox(win, { type: 'info', title: 'Open link in this tab', message: 'There is no sign-in link on the clipboard for this tab.', detail: 'In the email, right-click the sign-in button, choose Copy link address, then click this tab and press Alt+L.' }).catch(() => {});
+    return true;
+  }
+  contents.loadURL(url).catch(() => {});
+  return true;
+}
+
 // Keyboard shortcuts. Inside web sections (Outlook, Teams, OneDrive, Claude, DOMO) we keep our hands off
 // the keys those sites use themselves (Ctrl+K insert link, Ctrl+R reply, Ctrl+1..9 switch module),
 // so there the app's shortcuts use Alt or Ctrl+Shift instead. Returns true if the key was handled.
@@ -1469,6 +1586,7 @@ function handleKey(contents, input) {
   }
 
   if (key === 'q' && altOnly) { goBackSection(); return true; } // back to the previous tab
+  if (key === 'l' && altOnly) { return openClipboardLink(contents); } // sign-in links from emails: copy the link, press Alt+L in the tab that needs it
   if (key === 'l' && ctrlShift) { lockNow(); return true; } // lock the screen (only when a PIN is set up in Settings)
 
   if (key === 'f5' && !input.control && !input.alt) { reloadCurrent(); return true; }
@@ -1633,10 +1751,11 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('drmd:save-as', (e, name, text) => (fromDrmd(e) && typeof text === 'string' && (name === undefined || typeof name === 'string') ? drmdService.saveAs(name, text) : NOPE));
     ipcMain.handle('cc:reorder-sections', (e, ids) => {
       if (!isLocalSender(e) || !Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) return { ok: false, error: 'Not allowed.' };
-      const shown = sections.filter((x) => x.id !== 'settings');
+      // tabs that are switched off are not on the rail, so they are not part of the dragged order: they keep their place after the shown ones
+      const shown = sections.filter((x) => x.id !== 'settings' && x.type !== 'disabled');
       if (new Set(ids).size !== ids.length || ids.length !== shown.length || !shown.every((x) => ids.includes(x.id))) return { ok: false, error: 'That order does not match your tabs.' };
       const byId = new Map(sections.map((x) => [x.id, x]));
-      const next = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id === 'settings')];
+      const next = [...ids.map((x) => byId.get(x)), ...sections.filter((x) => x.id !== 'settings' && x.type === 'disabled'), ...sections.filter((x) => x.id === 'settings')];
       try {
         updateConfigFile((cfg) => {
           const rank = new Map(next.map((x, i) => [x.id, i]));
@@ -1711,7 +1830,7 @@ if (!app.requestSingleInstanceLock()) {
     terminalService = require('./terminal').createTerminal({
       ipcMain, clipboard,
       isTerminalSender: (e) => terminalContentsIds.has(e.sender.id) && !!e.senderFrame && String(e.senderFrame.url).startsWith('file://'),
-      getStartDir: () => { const t = sections.find((x) => x.type === 'terminal'); return (t && t.cwd) || TERMINAL_DEFAULT_DIR; },
+      getStartDir: () => { if (terminalNextDir) { const d = terminalNextDir; terminalNextDir = null; return d; } const t = sections.find((x) => x.type === 'terminal'); return (t && t.cwd) || TERMINAL_DEFAULT_DIR; },
       loadPty: () => (global.__ccTestPty ? global.__ccTestPty() : require('node-pty')),
     });
     // Weather and news on the Home page (settings file keys: "homeLocation" {name, lat, lon} and "newsFeeds" [{name, url}])
@@ -1726,7 +1845,7 @@ if (!app.requestSingleInstanceLock()) {
       return map[kind] ? homeFeeds.news(map[kind][0], force === true, map[kind][1]) : null;
     });
     ipcMain.handle('home:image', (e, url) => (isLocalSender(e) ? homeFeeds.image(url) : null));
-    ipcMain.handle('home:project-updates', (e) => (isLocalSender(e) ? require('./homefeeds').projectUpdates((loadedConfig && loadedConfig.projects) || []) : []));
+    ipcMain.handle('home:project-updates', (e) => (isLocalSender(e) ? require('./homefeeds').projectUpdates(effectiveProjects()) : []));
     ipcMain.handle('home:open-news', (e, url) => {
       if (!isLocalSender(e) || typeof url !== 'string' || !homeFeeds.knownLink(url)) return { ok: false };
       shell.openExternal(url);
@@ -1772,7 +1891,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     ipcMain.handle('explorer:roots', (e) => {
       if (!isLocalSender(e)) return null;
-      const projects = (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }));
+      const projects = effectiveProjects();
       const favs = ui.get().favs.filter((f) => findRoot(f.root));
       return { projects, drives: driveRoots(), favs, apps: appList().map((x) => ({ id: x.id, name: x.name, label: x.label, types: x.types, group: x.group })) };
     });
@@ -1889,12 +2008,30 @@ if (!app.requestSingleInstanceLock()) {
       return { ok: true };
     });
     // Right-click menu in the Explorer: PowerShell here, copy path, properties. All paths go through resolveInProject.
-    ipcMain.handle('fs:powershell', (e, id, rel) => {
+    ipcMain.handle('fs:powershell', async (e, id, rel) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
       const r = resolveInProject(id, rel);
       if (r.error) return { ok: false, error: r.error };
       let dir;
       try { dir = fs.statSync(r.real).isDirectory() ? r.real : path.dirname(r.real); } catch { return { ok: false, error: 'Not found.' }; }
+      // Opens in the PowerShell tab of this app when there is one. A separate window is only the fallback (no PowerShell tab in the rail).
+      const termSection = terminalService && sections.find((x) => x.type === 'terminal');
+      if (termSection) {
+        if (/[\u0000-\u001f]/.test(dir)) return { ok: false, error: 'That folder cannot be opened in the terminal.' };
+        if (!terminalService.hasSession()) { terminalNextDir = dir; select(termSection.id); return { ok: true, inApp: true }; }
+        select(termSection.id);
+        let choice = 2;
+        try {
+          ({ response: choice } = await dialog.showMessageBox(win, {
+            type: 'question', buttons: ['Change folder in the open terminal', 'Restart the terminal here', 'Cancel'], defaultId: 0, cancelId: 2,
+            title: 'Open in PowerShell here', message: 'Open this folder in the PowerShell tab?', detail: dir + '\n\nIf a program is running in the terminal (such as Claude), choose Restart, because "Change folder" types a command into whatever is running.',
+          }));
+        } catch { choice = 2; }
+        if (choice === 0) terminalService.cd(dir);
+        else if (choice === 1) { terminalNextDir = dir; terminalService.restart(); }
+        else return { ok: true, inApp: true, cancelled: true };
+        return { ok: true, inApp: true };
+      }
       if (process.platform !== 'win32' && !spawnShell) return { ok: false, error: 'PowerShell is only available on Windows.' };
       try {
         // fixed arguments only; the folder is passed as the working directory, never as part of a command
@@ -2056,6 +2193,27 @@ if (!app.requestSingleInstanceLock()) {
       return { enabled: true, ...(await todoService.refresh()) };
     });
 
+    // Morning Brief (read from Outlook on the web)
+    briefService = createBrief({ scrape: scrapeBrief, cacheFile: path.join(dataDir(), 'brief-cache.json'), onChange: broadcastBrief });
+    const runBrief = () => {
+      if (!briefEnabled()) return;
+      const b = briefService.get();
+      const n = new Date();
+      const today = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+      if (b.fmt === 2 && b.date === today && b.updated && Date.now() - b.updated < 2 * 3600 * 1000) return; // today's brief is already here
+      briefService.refresh();
+    };
+    // read it straight after start-up, then look every 5 minutes until today's brief is in
+    if (!process.env.CC_TEST_SCRIPT) { setTimeout(runBrief, 3000); setInterval(runBrief, 5 * 60 * 1000); }
+    // get the Everything search helper ready now, so the first search in the search box is quick
+    if (!process.env.CC_TEST_SCRIPT) setTimeout(() => { try { fileSearchService(); if (everythingSvc) everythingSvc.warm(); } catch { /* the first search says what is wrong */ } }, 4000);
+    ipcMain.handle('brief:get', (e) => (isLocalSender(e) ? { enabled: briefEnabled(), ...briefService.get() } : null));
+    ipcMain.handle('brief:refresh', async (e) => {
+      if (!isLocalSender(e)) return null;
+      if (!briefEnabled()) return { enabled: false, ...briefService.get() };
+      return { enabled: true, ...(await briefService.refresh()) };
+    });
+
     // ORACLE tab: status.json read-only, app_answers.json queue only -- never touches
     // CEO_Decisions.xlsx (Dale, 05/11/2026). oracleRoot comes from the "oracle" entry in
     // config's projects list, same as every other project path in this app.
@@ -2067,6 +2225,21 @@ if (!app.requestSingleInstanceLock()) {
       const p = (loadedConfig && Array.isArray(loadedConfig.projects) ? loadedConfig.projects : []).find((x) => x && x.id === 'oracle');
       return p && p.path ? String(p.path) : null;
     }
+    // Home page ORACLE panel: the newest PDF reports ORACLE has saved (read-only)
+    ipcMain.handle('oracle:reports', (e) => {
+      if (!isLocalSender(e)) return null;
+      const root = oracleRoot();
+      if (!root) return { ok: false, kinds: [] };
+      try { return require('./oraclereports').list(root); } catch { return { ok: false, kinds: [] }; }
+    });
+    ipcMain.handle('oracle:open-report', async (e, kind, name) => {
+      if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
+      const root = oracleRoot();
+      const f = root ? require('./oraclereports').find(root, kind, name) : null;
+      if (!f) return { ok: false, error: 'That report is no longer there.' };
+      const err = await shell.openPath(f.path);
+      return err ? { ok: false, error: err } : { ok: true };
+    });
     ipcMain.handle('oracle:status', (e) => {
       if (!isLocalSender(e)) return null;
       const root = oracleRoot();
@@ -2103,6 +2276,17 @@ if (!app.requestSingleInstanceLock()) {
       if (!root) return { ok: false, reason: 'unreadable' };
       return require('./oracle').readHistory(root);
     });
+    // Pending (not-yet-applied) app_answers.json queue (Dale, 11/11/2026 -- the
+    // "approved, but it's back asking again after I reopen" report): read-only, lets the
+    // renderer show a row as "pending next run" instead of reverting to its raw
+    // Approve/Reject/Hold buttons whenever a reload lands between a click here and
+    // ORACLE's next live run actually applying it.
+    ipcMain.handle('oracle:pending', (e) => {
+      if (!isLocalSender(e)) return null;
+      const root = oracleRoot();
+      if (!root) return { ok: false, reason: 'unreadable' };
+      return require('./oracle').readPendingAnswers(root);
+    });
 
     ipcMain.handle('data:get', (e) => (isLocalSender(e) ? store.get() : null));
     ipcMain.handle('data:set', (e, patch) => {
@@ -2113,7 +2297,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     ipcMain.handle('app:settings', (e) => (isLocalSender(e) ? { userName: String((loadedConfig && loadedConfig.userName) || '').slice(0, 60) } : null));
     ipcMain.handle('projects:list', (e) => (isLocalSender(e)
-      ? (loadedConfig.projects || []).filter((p) => p && p.id && p.name).map((p) => ({ id: String(p.id), name: String(p.name), path: String(p.path || '') }))
+      ? effectiveProjects()
       : []));
     ipcMain.handle('projects:open-folder', async (e, id) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };
@@ -2197,8 +2381,7 @@ if (!app.requestSingleInstanceLock()) {
     // ---- Searching this PC from the search box ----
     ipcMain.handle('files:search', (e, q) => {
       if (!isLocalSender(e) || typeof q !== 'string') return { ok: false, results: [] };
-      if (!fileSearch) fileSearch = createFileSearch();
-      return fileSearch.search(q);
+      return fileSearchService().search(q);
     });
     ipcMain.handle('files:open', async (e, id, reveal) => {
       if (!isLocalSender(e) || !fileSearch) return { ok: false, error: 'Not allowed.' };
@@ -2294,6 +2477,7 @@ if (!app.requestSingleInstanceLock()) {
     // Right-click in a text box or on selected text: spelling suggestions, Cut/Copy/Paste. (The Browser tab builds its own menu.)
     contents.on('context-menu', (_event, params) => {
       if (browserService && browserService.owns(contents)) return;
+      if (terminalContentsIds.has(contents.id)) return; // the terminal page handles right-click itself (copy, or paste)
       const template = contextTemplate(contents, params);
       if (template.length) Menu.buildFromTemplate(template).popup();
     });
@@ -2304,6 +2488,6 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('before-quit', () => closeEverything());
-  app.on('will-quit', () => { try { if (terminalService) terminalService.killAll(); } catch { /* closing anyway */ } });
+  app.on('will-quit', () => { try { if (terminalService) terminalService.killAll(); } catch { /* closing anyway */ } try { if (everythingSvc) everythingSvc.stop(); } catch { /* closing anyway */ } });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 }
