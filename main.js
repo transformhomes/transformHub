@@ -721,7 +721,7 @@ function resolveInProject(id, rel) {
   return { root, real, clean, kind: proj.kind };
 }
 
-function listDir(id, rel) {
+function listDir(id, rel, showHidden) {
   const r = resolveInProject(id, rel);
   if (r.error) return { ok: false, error: r.error };
   let st;
@@ -731,7 +731,7 @@ function listDir(id, rel) {
   try { dirents = fs.readdirSync(r.real, { withFileTypes: true }); } catch { return { ok: false, error: 'Could not open this folder.' }; }
   const entries = [];
   for (const d of dirents) {
-    if (HIDE_NAMES.has(d.name) || d.isSymbolicLink() || (!d.isDirectory() && !d.isFile())) continue;
+    if ((!showHidden && HIDE_NAMES.has(d.name)) || d.isSymbolicLink() || (!d.isDirectory() && !d.isFile())) continue;
     if (r.kind === 'drive' && isBlockedName(d.name)) continue;
     let size = 0, mtime = 0;
     if (entries.length < 1500) {
@@ -1988,7 +1988,7 @@ if (!app.requestSingleInstanceLock()) {
       if (!isFile || !a.types.includes(ext) || RISKY_EXT.has(ext)) return { ok: false, error: a.name + ' is not set up to open this type of file.' };
       return startApp(id, r.real);
     });
-    ipcMain.handle('fs:list', (e, id, rel) => (isLocalSender(e) ? listDir(id, rel) : { ok: false, error: 'Not allowed.' }));
+    ipcMain.handle('fs:list', (e, id, rel, hidden) => (isLocalSender(e) ? listDir(id, rel, hidden === true) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('fs:read', (e, id, rel) => (isLocalSender(e) ? readPreview(id, rel) : { ok: false, error: 'Not allowed.' }));
     ipcMain.handle('fs:open', async (e, id, rel) => {
       if (!isLocalSender(e)) return { ok: false, error: 'Not allowed.' };

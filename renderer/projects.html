@@ -97,6 +97,9 @@
   const root = document.getElementById('root');
   const activeCount = (pid) => App.data.tasks.filter((t) => !t.done && t.project === pid).length;
   let split = false;                       // two folders side by side
+  let showHidden = false;                  // also list names normally tucked away (.git, node_modules, Thumbs.db ...)
+  try { showHidden = localStorage.getItem('th-show-hidden') === '1'; } catch { /* not kept */ }
+  const ls = (p, r) => window.cc.listDir(p, r, showHidden);
   let active = 'a';                        // which pane the folder tree opens folders in
   let paneB = { project: null, path: '', entries: null, error: null };
   let drag = null;                         // the item being dragged inside this page
@@ -225,7 +228,7 @@
     const k = tkey(project, rel);
     kids.set(k, 'loading');
     renderTree();
-    const r = await window.cc.listDir(project, rel);
+    const r = await ls(project, rel);
     kids.set(k, r && r.ok && !r.isFile ? r.entries : (r && r.ok ? [] : { error: (r && r.error) || 'Could not open.' }));
     renderTree();
   }
@@ -253,7 +256,7 @@
       if (!Array.isArray(kids.get(tkey(project, rel)))) await loadDir(project, rel);
     }
     if (path && !keepClosed) {
-      const r = await window.cc.listDir(project, path);
+      const r = await ls(project, path);
       if (r && r.ok && !r.isFile) {
         expanded.add(tkey(project, path));
         if (!Array.isArray(kids.get(tkey(project, path)))) await loadDir(project, path);
@@ -268,7 +271,7 @@
     await refreshRoots();
     view = null;
     if (!loc.project || !rootById(loc.project)) { render(); return; }
-    const r = await window.cc.listDir(loc.project, loc.path);
+    const r = await ls(loc.project, loc.path);
     if (my !== seq) return;
     if (!r || !r.ok) view = { kind: 'error', error: (r && r.error) || 'Could not open this.' };
     else if (r.isFile) {
@@ -450,6 +453,7 @@
       atRoot && proj && h('button', { class: isFocus ? '' : 'ghost', onclick: () => App.save({ focusProject: isFocus ? null : p.id }) }, isFocus ? '★ Focus project (click to clear)' : '☆ Make this my focus'));
 
     actions.append(h('button', { class: split ? '' : 'ghost', onclick: toggleSplit }, split ? 'Close split view' : 'Split view'));
+    actions.append(h('button', { class: showHidden ? '' : 'ghost', 'aria-pressed': showHidden ? 'true' : 'false', title: 'Also list items such as .git, node_modules and Thumbs.db', onclick: toggleHidden }, showHidden ? 'Hidden items: shown' : 'Hidden items: off'));
     const list = buildList(p, view.entries, loc.path, (rel) => goTo(p.id, rel), (rel) => goTo(p.id, rel));
 
     show(crumbs(p), h('h1', { text: loc.path ? loc.path.split('/').pop() : p.name }), h('p', { class: 'sub', text: fullPath(p, loc.path) }),
@@ -535,7 +539,7 @@
     }
     paintNav();
     if (iv.sibKey !== key) {
-      window.cc.listDir(p.id, folder).then((r) => {
+      ls(p.id, folder).then((r) => {
         if (!r || !r.ok || !Array.isArray(r.entries)) return;
         iv.sibKey = key;
         iv.siblings = r.entries.filter((e) => !e.dir && IMG_EXT.test(e.name)).map((e) => (folder ? folder + '/' : '') + e.name);
@@ -738,6 +742,11 @@
     const q = which === 'a' ? loc : paneB;
     if (q.project) reveal(q.project, q.path);
   }
+  function toggleHidden() {
+    showHidden = !showHidden;
+    try { localStorage.setItem('th-show-hidden', showHidden ? '1' : '0'); } catch { /* not kept */ }
+    refreshAll();
+  }
   function toggleSplit() {
     split = !split;
     if (split) { paneB = { project: loc.project, path: loc.path, entries: null, error: null }; active = 'a'; loadPaneB(); } else { active = 'a'; render(); }
@@ -746,7 +755,7 @@
     if (!split) return;
     const my = paneB;
     if (!paneB.project || !rootById(paneB.project)) { paneB.entries = null; render(); return; }
-    const r = await window.cc.listDir(paneB.project, paneB.path);
+    const r = await ls(paneB.project, paneB.path);
     if (my !== paneB) return;
     if (r && r.ok && !r.isFile) { paneB.entries = r.entries; paneB.error = null; }
     else { paneB.entries = null; paneB.error = (r && r.error) || 'Could not open this.'; }

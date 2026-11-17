@@ -43,6 +43,12 @@ public class EvIpc : NativeWindow
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]
     private static extern IntPtr FindWindow(string cls, string title);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowExW")]
+    private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder sb, int max);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, ref COPYDATASTRUCT lParam, uint flags, uint timeout, out IntPtr result);
 
@@ -51,6 +57,9 @@ public class EvIpc : NativeWindow
     private const int REPLY = 77;
     private List<string> rows = new List<string>();
     private bool gotReply;
+    public int TotItems;
+    public int NumItems;
+    public int ReplyBytes;
 
     public EvIpc()
     {
@@ -76,9 +85,32 @@ public class EvIpc : NativeWindow
             target = FindWindow(c, null);
             if (target != IntPtr.Zero) break;
         }
-        if (target == IntPtr.Zero) throw new Exception("NOWINDOW");
+        List<string> seen = new List<string>();
+        if (target == IntPtr.Zero)
+        {
+            // Not under the usual names: look through every top-level and message-only window for one named like Everything's
+            foreach (IntPtr parent in new IntPtr[] { IntPtr.Zero, new IntPtr(-3) })
+            {
+                IntPtr w = IntPtr.Zero;
+                for (int guard = 0; guard < 20000; guard++)
+                {
+                    w = FindWindowEx(parent, w, null, null);
+                    if (w == IntPtr.Zero) break;
+                    System.Text.StringBuilder sb = new System.Text.StringBuilder(256);
+                    GetClassName(w, sb, 256);
+                    string cn = sb.ToString();
+                    if (cn.StartsWith("EVERYTHING", StringComparison.OrdinalIgnoreCase))
+                    {
+                        seen.Add(cn);
+                        if (target == IntPtr.Zero && cn.IndexOf("TASKBAR", StringComparison.OrdinalIgnoreCase) < 0 && cn.IndexOf("TOOLTIP", StringComparison.OrdinalIgnoreCase) < 0) target = w;
+                    }
+                }
+            }
+        }
+        if (target == IntPtr.Zero) throw new Exception("NOWINDOW (windows named Everything: " + (seen.Count == 0 ? "none" : string.Join(", ", seen.ToArray())) + ")");
         rows.Clear();
         gotReply = false;
+        TotItems = 0; NumItems = 0; ReplyBytes = 0;
         byte[] str = System.Text.Encoding.Unicode.GetBytes(text + "\\0");
         byte[] buf = new byte[28 + str.Length];
         WriteInt(buf, 0, (uint)Handle.ToInt64());
@@ -129,6 +161,9 @@ public class EvIpc : NativeWindow
         gotReply = true;
         if (size < 20) return;
         int numItems = Marshal.ReadInt32(p, 4);
+        TotItems = Marshal.ReadInt32(p, 0);
+        NumItems = numItems;
+        ReplyBytes = size;
         for (int i = 0; i < numItems; i++)
         {
             int at = 20 + i * 8;
@@ -170,9 +205,11 @@ const HELPER_SCRIPT = [
   "  try {",
   "    $rows = $ev.Search($parts[1], $classes, " + MAX_FROM_EVERYTHING + ")",
   "    foreach ($r in $rows) { [Console]::Out.WriteLine($id + \"`tR`t\" + $r) }",
+  "    [Console]::Out.WriteLine($id + \"`tINFO`t\" + $ev.TotItems + ' total, ' + $ev.NumItems + ' returned, ' + $ev.ReplyBytes + ' bytes, ' + @($rows).Count + ' rows')",
   "    [Console]::Out.WriteLine($id + \"`tEND\")",
   "  } catch {",
-  "    $msg = ($_.Exception.Message -replace '[\\r\\n\\t]+', ' ')",
+  "    $ex = $_.Exception; if ($ex.InnerException) { $ex = $ex.InnerException }",
+  "    $msg = ($ex.Message -replace '[\\r\\n\\t]+', ' ')",
   "    if ($msg -notmatch '^(NOWINDOW|TIMEOUT|NOREPLY)$') { $msg = 'ERROR ' + $msg }",
   "    [Console]::Out.WriteLine($id + \"`tERR`t\" + $msg)",
   "  }",
@@ -221,9 +258,10 @@ function createEverything({ exePath, instance, log = () => {}, spawnHelper, laun
     if (parts[0] === 'FATAL') { log('helper could not start: ' + parts.slice(1).join(' ')); failAll('HELPER', parts.slice(1).join(' ')); stop(); return; }
     const p = pending.get(Number(parts[0]));
     if (!p) return;
-    if (parts[1] === 'R' && parts[2]) p.rows.push(parts[2] + '\t' + (parts[3] || 'F'));
+    if (parts[1] === 'INFO') log('Everything answered: ' + (parts[2] || ''));
+    else if (parts[1] === 'R' && parts[2]) p.rows.push(parts[2] + '\t' + (parts[3] || 'F'));
     else if (parts[1] === 'END') { clearTimeout(p.timer); pending.delete(Number(parts[0])); p.resolve(p.rows.join('\n')); }
-    else if (parts[1] === 'ERR') { log('answer: ' + (parts[2] || '')); fail(Number(parts[0]), String(parts[2] || 'ERROR').startsWith('ERROR') ? 'HELPER' : parts[2], parts.slice(2).join(' ')); }
+    else if (parts[1] === 'ERR') { log('answer: ' + (parts[2] || '')); fail(Number(parts[0]), ((/(NOWINDOW|TIMEOUT|NOREPLY)/.exec(String(parts[2] || '')) || [])[1] || 'HELPER'), parts.slice(2).join(' ')); }
   }
 
   function start() {
