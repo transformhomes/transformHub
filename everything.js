@@ -8,11 +8,12 @@
 // A small PowerShell helper is started once and kept running, so each search is fast (the helper builds its tiny
 // message window only the first time). If Everything is not running, it is started in the background first.
 const { spawn } = require('child_process');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
 const MAX_FROM_EVERYTHING = 120;
-const QUERY_TIMEOUT_MS = 12000;
+const QUERY_TIMEOUT_MS = 20000;
 const CANDIDATE_EXES = [
   'D:\\Program Files\\Everything\\Everything.exe',
   'C:\\Program Files\\Everything\\Everything.exe',
@@ -43,6 +44,9 @@ public class EvIpc : NativeWindow
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowW")]
     private static extern IntPtr FindWindow(string cls, string title);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ChangeWindowMessageFilterEx(IntPtr hWnd, uint msg, uint action, IntPtr pChangeFilterStruct);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindWindowExW")]
     private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
 
@@ -65,8 +69,9 @@ public class EvIpc : NativeWindow
     {
         CreateParams cp = new CreateParams();
         cp.Caption = "TransformWorkstationEverything";
-        cp.Parent = new IntPtr(-3);
         CreateHandle(cp);
+        // As in Everything's own SDK: let Everything's reply message through Windows' security filter (needed when Everything runs as administrator)
+        try { ChangeWindowMessageFilterEx(Handle, (uint)WM_COPYDATA, 1, IntPtr.Zero); } catch (Exception) { }
     }
 
     private static void WriteInt(byte[] b, int at, uint v)
@@ -80,10 +85,12 @@ public class EvIpc : NativeWindow
     public string[] Search(string text, string[] classes, int max)
     {
         IntPtr target = IntPtr.Zero;
+        string foundCls = "";
+        bool accepted = false;
         foreach (string c in classes)
         {
             target = FindWindow(c, null);
-            if (target != IntPtr.Zero) break;
+            if (target != IntPtr.Zero) { foundCls = c; break; }
         }
         List<string> seen = new List<string>();
         if (target == IntPtr.Zero)
@@ -102,7 +109,7 @@ public class EvIpc : NativeWindow
                     if (cn.StartsWith("EVERYTHING", StringComparison.OrdinalIgnoreCase))
                     {
                         seen.Add(cn);
-                        if (target == IntPtr.Zero && cn.IndexOf("TASKBAR", StringComparison.OrdinalIgnoreCase) < 0 && cn.IndexOf("TOOLTIP", StringComparison.OrdinalIgnoreCase) < 0) target = w;
+                        if (target == IntPtr.Zero && (cn.Equals("EVERYTHING", StringComparison.OrdinalIgnoreCase) || cn.StartsWith("EVERYTHING_(", StringComparison.OrdinalIgnoreCase))) { target = w; foundCls = cn; }
                     }
                 }
             }
@@ -130,14 +137,27 @@ public class EvIpc : NativeWindow
             cds.cbData = buf.Length;
             cds.lpData = mem;
             IntPtr res;
-            IntPtr ok = SendMessageTimeout(target, WM_COPYDATA, Handle, ref cds, 2, 6000, out res);
-            if (ok == IntPtr.Zero) throw new Exception("TIMEOUT");
+            IntPtr ok = SendMessageTimeout(target, WM_COPYDATA, Handle, ref cds, 2, 8000, out res);
+            accepted = (res != IntPtr.Zero);
+            if (ok == IntPtr.Zero)
+            {
+                int werr = Marshal.GetLastWin32Error();
+                if (werr == 5) throw new Exception("ACCESSDENIED (Windows blocked the request: Everything is running with higher rights than this app, window " + foundCls + ")");
+                throw new Exception("TIMEOUT (Windows error " + werr + ", window " + foundCls + ")");
+            }
         }
         finally
         {
             Marshal.FreeHGlobal(mem);
         }
-        if (!gotReply) throw new Exception("NOREPLY");
+        // Everything may send the reply a moment after it accepts the request, so keep the window's messages flowing while waiting
+        DateTime until = DateTime.UtcNow.AddMilliseconds(10000);
+        while (!gotReply && DateTime.UtcNow < until)
+        {
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(10);
+        }
+        if (!gotReply) throw new Exception("NOREPLY (accepted: " + (accepted ? "yes" : "no") + ", window " + foundCls + ")");
         return rows.ToArray();
     }
 
@@ -261,7 +281,7 @@ function createEverything({ exePath, instance, log = () => {}, spawnHelper, laun
     if (parts[1] === 'INFO') log('Everything answered: ' + (parts[2] || ''));
     else if (parts[1] === 'R' && parts[2]) p.rows.push(parts[2] + '\t' + (parts[3] || 'F'));
     else if (parts[1] === 'END') { clearTimeout(p.timer); pending.delete(Number(parts[0])); p.resolve(p.rows.join('\n')); }
-    else if (parts[1] === 'ERR') { log('answer: ' + (parts[2] || '')); fail(Number(parts[0]), ((/(NOWINDOW|TIMEOUT|NOREPLY)/.exec(String(parts[2] || '')) || [])[1] || 'HELPER'), parts.slice(2).join(' ')); }
+    else if (parts[1] === 'ERR') { log('answer: ' + (parts[2] || '')); fail(Number(parts[0]), ((/(NOWINDOW|TIMEOUT|NOREPLY|ACCESSDENIED)/.exec(String(parts[2] || '')) || [])[1] || 'HELPER'), parts.slice(2).join(' ')); }
   }
 
   function start() {
@@ -320,4 +340,54 @@ function createEverything({ exePath, instance, log = () => {}, spawnHelper, laun
   return { query, stop, warm: () => { try { start(); } catch { /* reported by the first search */ } }, classes };
 }
 
-module.exports = { createEverything, findEverythingExe, HELPER_SCRIPT, CSHARP };
+// ---- Everything's own web server (Tools > Options > HTTP Server), used when the window-message IPC is not available ----
+// Only ever talks to this PC (127.0.0.1). Asks for names only: GET /?search=<words>&json=1&path_column=1
+function createEverythingHttp({ port = 8080, host = '127.0.0.1', username = '', password = '', exePath, log = () => {}, launch = defaultLaunch, retryMs = 1000, waitForStartMs = 12000, request = http.request } = {}) {
+  let launchedAt = 0;
+  const codeErr = (code, message) => Object.assign(new Error(message || code), { code });
+  function once(q) {
+    return new Promise((resolve, reject) => {
+      const headers = { Accept: 'application/json' };
+      if (username || password) headers.Authorization = 'Basic ' + Buffer.from(String(username) + ':' + String(password)).toString('base64');
+      const p = '/?search=' + encodeURIComponent(q) + '&json=1&path_column=1&count=' + MAX_FROM_EVERYTHING + '&sort=date_modified&ascending=0';
+      const req = request({ host: '127.0.0.1', port: Number(port), path: p, method: 'GET', headers, timeout: 8000 }, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (d) => { body += d; if (body.length > 4 * 1024 * 1024) { req.destroy(); reject(codeErr('HTTP', 'Reply too large')); } });
+        res.on('end', () => {
+          if (res.statusCode === 401 || res.statusCode === 403) { log('http: ' + res.statusCode + ' (user name or password)'); reject(codeErr('HTTPAUTH')); return; }
+          if (res.statusCode !== 200) { log('http: status ' + res.statusCode + ' ' + body.slice(0, 120).replace(/\s+/g, ' ')); reject(codeErr('HTTP', 'Status ' + res.statusCode)); return; }
+          let j;
+          try { j = JSON.parse(body.replace(/^\uFEFF/, '')); } catch { log('http: reply was not JSON: ' + body.slice(0, 160).replace(/\s+/g, ' ')); reject(codeErr('HTTP', 'Not JSON')); return; }
+          const list = Array.isArray(j && j.results) ? j.results : [];
+          log('Everything web server answered: ' + (j && j.totalResults) + ' total, ' + list.length + ' returned');
+          const out = [];
+          for (const r of list) {
+            if (!r || typeof r.name !== 'string') continue;
+            const dir = typeof r.path === 'string' ? r.path : '';
+            const full = dir ? dir.replace(/[\\/]+$/, '') + '\\' + r.name : r.name;
+            out.push(full + '\t' + (String(r.type).toLowerCase() === 'folder' ? 'D' : 'F'));
+          }
+          resolve(out.join('\n'));
+        });
+      });
+      req.on('timeout', () => { req.destroy(); reject(codeErr('HTTPDOWN', 'timeout')); });
+      req.on('error', (e) => reject(codeErr('HTTPDOWN', (e && e.code) || 'error')));
+      req.end();
+    });
+  }
+  async function query(q) {
+    try { return await once(q); } catch (e) { if (e.code !== 'HTTPDOWN') throw e; }
+    const now = Date.now();
+    if (exePath && now - launchedAt > 60000) { launchedAt = now; log('Everything web server not answering: starting ' + exePath); try { launch(exePath); } catch { /* reported below */ } }
+    const until = Date.now() + waitForStartMs;
+    while (Date.now() < until) {
+      await sleep(retryMs);
+      try { return await once(q); } catch (e) { if (e.code !== 'HTTPDOWN') throw e; }
+    }
+    throw codeErr('HTTPDOWN', 'Everything web server is not answering.');
+  }
+  return { query, stop: () => {}, warm: () => {}, classes: [] };
+}
+
+module.exports = { createEverything, createEverythingHttp, findEverythingExe, HELPER_SCRIPT, CSHARP };

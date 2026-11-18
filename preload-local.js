@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('cc', {
   openInWeb: (root, rel) => ipcRenderer.invoke('fs:open-web', root, rel),
   dragOut: (root, rel) => ipcRenderer.send('fs:drag-out', root, rel),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
+  reportLocation: (project, rel) => ipcRenderer.send('explorer:where', project, rel),
   listDir: (project, rel, hidden) => ipcRenderer.invoke('fs:list', project, rel, hidden === true),
   readFile: (project, rel) => ipcRenderer.invoke('fs:read', project, rel),
   openFile: (project, rel) => ipcRenderer.invoke('fs:open', project, rel),

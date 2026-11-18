@@ -14,7 +14,7 @@ const { buildSettings, rawSettingsError } = require('./settings');
 const { setupSpellcheck, contextTemplate } = require('./spell');
 const { createLock, MAX_PIN } = require('./lock');
 const { createFileSearch } = require('./filesearch');
-const { createEverything, findEverythingExe } = require('./everything');
+const { createEverything, createEverythingHttp, findEverythingExe } = require('./everything');
 const { createRecent } = require('./recent');
 const { listBackups, restoreBackup } = require('./backups');
 const { execFile } = require('child_process');
@@ -72,15 +72,19 @@ let recentSvc = null;
 let fileSearch = null; // created on first use (a test can supply its own)
 let everythingSvc = null;
 // File search uses Everything (voidtools) when it is installed, because it does not need the Windows Search service.
-// Optional settings: "fileSearch": { "engine": "windows" } to force the Windows index, "everythingPath": "<Everything.exe>".
+// Optional settings: "fileSearch": { "engine": "windows" } to force the Windows index, "everythingPath": "<Everything.exe>",
+// "everythingHttp": { "port": 8080, "username": "...", "password": "..." } to use Everything's local web server (needed by Everything 1.5).
 function fileSearchService() {
   if (fileSearch) return fileSearch;
   const cfg = (loadedConfig && loadedConfig.fileSearch && typeof loadedConfig.fileSearch === 'object') ? loadedConfig.fileSearch : {};
   const exe = process.platform === 'win32' && cfg.engine !== 'windows' ? findEverythingExe(cfg.everythingPath) : null;
-  if (exe) {
+  const httpCfg = process.platform === 'win32' && cfg.engine !== 'windows' && cfg.everythingHttp && typeof cfg.everythingHttp === 'object' ? cfg.everythingHttp : null;
+  if (exe || httpCfg) {
     const logFile = path.join(app.getPath('userData'), 'everything-diagnostics.log');
     const log = (line) => { try { fs.appendFileSync(logFile, new Date().toISOString() + ' ' + String(line).slice(0, 500) + '\n'); } catch { /* best effort */ } };
-    everythingSvc = createEverything({ exePath: exe, instance: cfg.everythingInstance, log });
+    everythingSvc = httpCfg
+      ? createEverythingHttp({ port: Number(httpCfg.port) || 8080, username: httpCfg.username || '', password: httpCfg.password || '', exePath: exe, log })
+      : createEverything({ exePath: exe, instance: cfg.everythingInstance, log });
     fileSearch = createFileSearch({ everything: everythingSvc });
   } else fileSearch = createFileSearch();
   return fileSearch;
@@ -2379,9 +2383,26 @@ if (!app.requestSingleInstanceLock()) {
     });
     ipcMain.handle('settings:home-recent-get', (e) => (isLocalSender(e) ? { on: recentOn() } : null));
     // ---- Searching this PC from the search box ----
+    // The Explorer says which folder it is showing. The search box searches only that folder (and below) while the Explorer is the tab in front; on Home and other tabs it searches the whole PC.
+    const explorerWhere = new Map();
+    ipcMain.on('explorer:where', (e, p, r) => {
+      if (!isLocalSender(e) || typeof p !== 'string' || p.length > 100 || typeof r !== 'string' || safeRel(r) === null) return;
+      explorerWhere.set(e.sender.id, { project: p, path: safeRel(r) });
+    });
+    const searchScope = () => {
+      try {
+        if (!currentId || currentId.split('#')[0] !== 'projects') return null;
+        const v = views.get(currentId);
+        const w = v && !v.webContents.isDestroyed() ? explorerWhere.get(v.webContents.id) : null;
+        if (!w || !w.project) return null;
+        const r = resolveInProject(w.project, w.path);
+        if (r.error) return null;
+        return fs.statSync(r.real).isDirectory() ? r.real : path.dirname(r.real);
+      } catch { return null; }
+    };
     ipcMain.handle('files:search', (e, q) => {
       if (!isLocalSender(e) || typeof q !== 'string') return { ok: false, results: [] };
-      return fileSearchService().search(q);
+      return fileSearchService().search(q, searchScope());
     });
     ipcMain.handle('files:open', async (e, id, reveal) => {
       if (!isLocalSender(e) || !fileSearch) return { ok: false, error: 'Not allowed.' };

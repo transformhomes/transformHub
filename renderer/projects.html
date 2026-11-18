@@ -268,6 +268,7 @@
 
   async function load() {
     const my = ++seq;
+    try { window.cc.reportLocation(loc.project || '', loc.path || ''); } catch { /* the search box then looks everywhere */ }
     await refreshRoots();
     view = null;
     if (!loc.project || !rootById(loc.project)) { render(); return; }
